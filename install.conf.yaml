@@ -70,6 +70,9 @@
     ~/.codex/archived_sessions:
       path: persistent/codex/archived_sessions
       if: '[ ! -e "$HOME/.codex/archived_sessions" ] || [ -L "$HOME/.codex/archived_sessions" ]'
+    ~/.codex/history.jsonl:
+      path: persistent/codex/history.jsonl
+      if: 'touch persistent/codex/history.jsonl; [ ! -e "$HOME/.codex/history.jsonl" ] || [ -L "$HOME/.codex/history.jsonl" ]'
     ~/.claude/projects:
       path: persistent/claude/projects
       if: '[ ! -e "$HOME/.claude/projects" ] || [ -L "$HOME/.claude/projects" ]'
@@ -85,9 +88,9 @@
     ~/.claude/settings.json:
       path: claude/settings.json
       if: '[ ! -e "$HOME/.claude/settings.json" ] || [ -L "$HOME/.claude/settings.json" ]'
-    ~/.claude/statusline.sh:
-      path: claude/statusline.sh
-      if: '[ ! -e "$HOME/.claude/statusline.sh" ] || [ -L "$HOME/.claude/statusline.sh" ]'
+    ~/.claude/statusline.js:
+      path: claude/statusline.js
+      if: '[ ! -e "$HOME/.claude/statusline.js" ] || [ -L "$HOME/.claude/statusline.js" ]'
     ~/.condarc:
     ~/.tmux.conf:
     ~/.tmux/scripts: tmux/scripts

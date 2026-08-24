@@ -2,7 +2,7 @@
   "model": "best",
   "statusLine": {
     "type": "command",
-    "command": "~/.claude/statusline.sh",
+    "command": "node ~/.claude/statusline.js",
     "refreshInterval": 60
   },
   "includeCoAuthoredBy": false,
