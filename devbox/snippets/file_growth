@@ -4,6 +4,7 @@ set -euo pipefail
 
 target="."
 target_set=0
+exec_cmd=""
 interval=1
 alpha="0.30"
 recursive=0
@@ -41,6 +42,8 @@ a directory target counts files as before.
 The smoothed speed uses EMA: smooth = alpha * current + (1 - alpha) * previous.
 
 options:
+  -e, --exec COMMAND   Count lines of COMMAND output instead of scanning a path
+                       (runs via bash -c once per poll; stdout is piped to wc -l)
   -i, --interval SEC   Poll interval in seconds. Default: 1
   -a, --alpha VALUE    EMA smoothing alpha in (0, 1]. Lower is smoother. Default: 0.30
   -n, --name PATTERN   Directory only: match file basenames, e.g. '*.jpg'
@@ -69,6 +72,8 @@ examples:
   ${cmd} ./outputs --append
   ${cmd} ./outputs --recursive --samples 10
   ${cmd} ./outputs --recursive -p 0
+  ${cmd} -e 'hdfs dfs -ls hdfs://cluster/path/out' --interval 30
+  ${cmd} -e 'hdfs dfs -ls hdfs://cluster/path/out' --total 44000000
 EOF
 }
 
@@ -79,6 +84,14 @@ die() {
 
 count_target() {
   local count entry base
+
+  # Custom counting command: count its output lines, like `<cmd> | wc -l`.
+  # Failures fall through to a count of 0 rather than killing the monitor
+  # (e.g. a transient hdfs error), matching the find fallbacks below.
+  if [[ -n "$exec_cmd" ]]; then
+    { bash -c "$exec_cmd" 2>/dev/null || true; } | wc -l | tr -d '[:space:]'
+    return
+  fi
 
   if [[ -f "$target" ]]; then
     LC_ALL=C wc -l < "$target" | tr -d '[:space:]'
@@ -180,6 +193,11 @@ PY
 parse_args() {
   while [[ "$#" -gt 0 ]]; do
     case "$1" in
+      -e | --exec)
+        [[ "$#" -ge 2 ]] || die "$1 requires a value"
+        exec_cmd="$2"
+        shift 2
+        ;;
       -i | --interval)
         [[ "$#" -ge 2 ]] || die "$1 requires a value"
         interval="$2"
@@ -256,6 +274,13 @@ parse_args() {
 }
 
 validate_args() {
+  if [[ -n "$exec_cmd" ]]; then
+    [[ "$target_set" -eq 0 ]] || die "--exec cannot be used with a path target"
+    [[ "$recursive" -eq 0 ]] || die "--recursive cannot be used with --exec"
+    [[ "$include_dirs" -eq 0 ]] || die "--include-dirs cannot be used with --exec"
+    [[ -z "$name_pattern" ]] || die "--name cannot be used with --exec"
+    [[ "$parallel_set" -eq 0 ]] || die "--parallel cannot be used with --exec"
+  fi
   [[ -n "$target" ]] || die "path cannot be empty"
   [[ "$interval" =~ ^[1-9][0-9]*$ ]] || die "--interval must be a positive integer"
   [[ "$samples" =~ ^[0-9]+$ ]] || die "--samples must be a non-negative integer"
@@ -343,7 +368,7 @@ print_intro() {
   local total_label="-" status_line keys_line
   [[ "$total" -gt 0 ]] && total_label="$total"
   printf '%sfile_growth%s %s%s%s\n' "$COLOR_BOLD" "$COLOR_RESET" "$COLOR_CYAN" "$target" "$COLOR_RESET"
-  if [[ "$mode" == "file-lines" ]]; then
+  if [[ "$mode" == "file-lines" || "$mode" == "exec" ]]; then
     status_line="mode=${mode} interval=${interval}s alpha=${alpha} total=${total_label}"
   else
     status_line="mode=${mode} pattern=${name_pattern:-*} interval=${interval}s alpha=${alpha} total=${total_label} include_dirs=${include_dirs} parallel=${parallel}"
@@ -688,7 +713,7 @@ render_screen() {
   printf '\033[H\033[2J'
   title_line="file_growth $target"
   screen_line "$title_line" "${COLOR_BOLD}file_growth${COLOR_RESET} ${COLOR_CYAN}${target}${COLOR_RESET}" "$cols"
-  if [[ "$mode" == "file-lines" ]]; then
+  if [[ "$mode" == "file-lines" || "$mode" == "exec" ]]; then
     status_line="mode=${mode} interval=${interval}s alpha=${alpha} total=${total_label}"
   else
     status_line="mode=${mode} pattern=${name_pattern:-*} interval=${interval}s alpha=${alpha} total=${total_label} include_dirs=${include_dirs} parallel=${parallel}"
@@ -894,12 +919,21 @@ run_screen() {
 parse_args "$@"
 validate_args
 
-if ! wait_for_target; then
-  exit 0
+# Exec mode has no path to wait for or validate; the command string doubles
+# as the display target in the title line.
+if [[ -n "$exec_cmd" ]]; then
+  target="$exec_cmd"
+  mode="exec"
+else
+  if ! wait_for_target; then
+    exit 0
+  fi
+  validate_target
 fi
-validate_target
 
-if [[ -d "$target" ]]; then
+if [[ -n "$exec_cmd" ]]; then
+  : # mode already set above
+elif [[ -d "$target" ]]; then
   target="$(cd "$target" && pwd -P)"
   mode="recursive"
   [[ "$recursive" -eq 1 ]] || mode="non-recursive"
