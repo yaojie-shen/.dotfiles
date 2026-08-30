@@ -10,9 +10,12 @@
 // a graceful empty line - accepted tradeoff for not needing an extra file.
 
 const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 const DIM = '\x1b[2m';
 const RESET = '\x1b[0m';
+const SNAPSHOT_PATH = path.join(os.homedir(), '.claude', 'statusline.snapshot.json');
 
 // Original hierarchy: the data (bar fill + percentage) is plain default
 // foreground - readable but not colorful; color appears only as a
@@ -107,11 +110,16 @@ function pacePart(data) {
   }
 
   const remainingPct = Math.round(100 - projectedPctAtReset);
-  // A comfortable-looking "N% left" reads as reassuring even when N is
-  // small - reuse the same 70%-used threshold the rest of this bar warns
-  // at (see warnColor) so a thin margin gets flagged instead of looking
-  // indistinguishable from a wide one.
-  if (projectedPctAtReset >= 70) {
+  // Tight means remaining <=10%. (Reframing this as an absolute "days of
+  // buffer beyond reset" was considered, but under this linear projection
+  // that collapses algebraically to a fixed percentage threshold anyway -
+  // bufferDays = 7 * remainingPct / (100 - remainingPct), independent of
+  // elapsed time - so it would only be a relabeling, not a real change in
+  // behavior. Picking the percentage directly is simpler and equivalent.
+  // The >=90 here numerically matches warnColor's red cutoff elsewhere in
+  // this file, but that is coincidental, not a shared constant - that one
+  // warns on current usage, this one on a forward projection.
+  if (projectedPctAtReset >= 90) {
     return `\x1b[33m⚡ ${remainingPct}% left at reset, tight${RESET}`;
   }
   return DIM + `⚡ ${remainingPct}% left at reset` + RESET;
@@ -152,6 +160,20 @@ function render(data) {
   return parts.filter((s) => s != null && s !== '').join(DIM + ' │ ' + RESET);
 }
 
+function writeSnapshot(data) {
+  const snapshot = {
+    captured_at: new Date().toISOString(),
+    model: data.model || null,
+    effort: data.effort || null,
+    context_window: data.context_window || null,
+    rate_limits: data.rate_limits || null,
+  };
+  const tmpPath = `${SNAPSHOT_PATH}.${process.pid}.tmp`;
+  fs.mkdirSync(path.dirname(SNAPSHOT_PATH), { recursive: true });
+  fs.writeFileSync(tmpPath, JSON.stringify(snapshot, null, 2) + '\n', { mode: 0o600 });
+  fs.renameSync(tmpPath, SNAPSHOT_PATH);
+}
+
 function main() {
   let raw;
   try {
@@ -173,6 +195,7 @@ function main() {
   }
 
   try {
+    writeSnapshot(data);
     console.log(render(data));
   } catch (e) {
     if (process.env.STATUSLINE_DEBUG) console.error(e);
