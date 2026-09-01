@@ -104,7 +104,7 @@ options:
 
 screen UI keys:
   h / ?                Show all screen UI keys
-  t                    Re-detect the terminal theme
+  t                    Toggle the terminal theme
   Esc                  Close help panel only
 
 During parallel recursive scans, the screen status shows folders as
@@ -1102,8 +1102,8 @@ render_screen() {
     frame_colored[9]="  ${COLOR_BOLD}g${COLOR_RESET}                  Jump to oldest retained row"
     frame_visible[10]="  G / End            Jump to latest row and follow new samples"
     frame_colored[10]="  ${COLOR_BOLD}G / End${COLOR_RESET}            Jump to latest row and follow new samples"
-    frame_visible[11]="  t                  Re-detect the terminal theme"
-    frame_colored[11]="  ${COLOR_BOLD}t${COLOR_RESET}                  Re-detect the terminal theme"
+    frame_visible[11]="  t                  Toggle the terminal theme"
+    frame_colored[11]="  ${COLOR_BOLD}t${COLOR_RESET}                  Toggle the terminal theme"
     frame_visible[12]="Press h, ?, or q to return to the monitor."
     frame_colored[12]="${COLOR_MUTED}Press h, ?, or q to return to the monitor.${COLOR_RESET}"
   else
@@ -1282,7 +1282,7 @@ render_screen() {
 # Handle one keypress from /dev/tty. Returns non-zero only when the monitor
 # should quit; q in help closes help instead of exiting.
 handle_key() {
-  local key page_rows previous_theme
+  local key page_rows
 
   read_input_event 1 || return 0
   if [[ "$input_event" == "theme" ]]; then
@@ -1312,13 +1312,10 @@ handle_key() {
       fi
       ;;
     t)
-      previous_theme="$screen_theme"
-      if ! query_screen_theme; then
-        if [[ "$previous_theme" == "dark" ]]; then
-          set_screen_theme "light"
-        else
-          set_screen_theme "dark"
-        fi
+      if [[ "$screen_theme" == "dark" ]]; then
+        set_screen_theme "light"
+      else
+        set_screen_theme "dark"
       fi
       screen_needs_render=1
       ;;
