@@ -1,3 +1,173 @@
 #!/usr/bin/env bash
 
-NONINTERACTIVE=1 /usr/bin/env bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+set -Eeuo pipefail
+
+ACTION="install"
+START_MARKER="# >>> homebrew initialize >>>"
+END_MARKER="# <<< homebrew initialize <<<"
+
+DEVBOX_UTILS="${DEVBOX_UTILS:-${DEVBOX_ROOT:-${HOME}/.devbox}/libexec/devbox-utils}"
+if [[ ! -f "$DEVBOX_UTILS" ]]; then
+  echo "Error: devbox-utils not found at: $DEVBOX_UTILS" >&2
+  exit 1
+fi
+# shellcheck disable=SC1090
+source "$DEVBOX_UTILS"
+
+case "$(uname -s)" in
+Linux)
+  HOMEBREW_PREFIX="/home/linuxbrew/.linuxbrew"
+  ;;
+Darwin)
+  if [[ "$(uname -m)" == "arm64" ]]; then
+    HOMEBREW_PREFIX="/opt/homebrew"
+  else
+    HOMEBREW_PREFIX="/usr/local"
+  fi
+  ;;
+*)
+  error "Homebrew is not supported on $(uname -s)"
+  exit 1
+  ;;
+esac
+BREW_BIN="$HOMEBREW_PREFIX/bin/brew"
+
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") [options]
+
+Behavior:
+  - Installs Homebrew into its official default prefix when it is missing.
+  - Configures ~/.bashrc and ~/.zshrc with a managed brew shellenv block.
+  - Reuses an existing installation without updating installed packages.
+
+Options:
+  -h, --help       Show this help message
+  -u, --uninstall  Run the official Homebrew uninstaller and remove managed rc blocks
+  --status         Show the installation and shell configuration status
+
+Examples:
+  $(basename "$0")
+  $(basename "$0") --status
+  $(basename "$0") --uninstall
+EOF
+}
+
+require_curl() {
+  if ! command -v curl >/dev/null 2>&1; then
+    error "curl is required to install or uninstall Homebrew"
+    exit 1
+  fi
+}
+
+configure_homebrew_rc() {
+  local rc_file="$1"
+  local content="eval \"\$($BREW_BIN shellenv)\""
+
+  configure_rc_block \
+    "$rc_file" \
+    "$START_MARKER" \
+    "$END_MARKER" \
+    "$content"
+}
+
+install() {
+  if [[ -x "$BREW_BIN" ]]; then
+    success "Homebrew is already installed at $HOMEBREW_PREFIX"
+  else
+    require_curl
+    info "Installing Homebrew into $HOMEBREW_PREFIX"
+    NONINTERACTIVE=1 /usr/bin/env bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  fi
+
+  if [[ ! -x "$BREW_BIN" ]]; then
+    error "Homebrew installation did not create $BREW_BIN"
+    exit 1
+  fi
+
+  for rc_file in "$HOME/.bashrc" "$HOME/.zshrc"; do
+    info "Configuring Homebrew in $rc_file"
+    configure_homebrew_rc "$rc_file"
+  done
+
+  success "Homebrew installation and shell configuration complete."
+  info "Open a new shell or run: eval \"\$($BREW_BIN shellenv)\""
+}
+
+uninstall() {
+  local removed_any=0
+
+  if [[ -x "$BREW_BIN" ]]; then
+    require_curl
+    warning "The official uninstaller will remove Homebrew and all packages installed under $HOMEBREW_PREFIX."
+    /usr/bin/env bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/uninstall.sh)"
+    removed_any=1
+  fi
+
+  for rc_file in "$HOME/.bashrc" "$HOME/.zshrc"; do
+    if [[ -f "$rc_file" ]] && grep -q "$START_MARKER" "$rc_file"; then
+      info "Removing Homebrew initialization from $rc_file"
+      remove_rc_block "$rc_file" "$START_MARKER" "$END_MARKER"
+      removed_any=1
+    fi
+  done
+
+  if [[ "$removed_any" -eq 1 ]]; then
+    success "Homebrew and its managed shell configuration were removed."
+  else
+    warning "Homebrew is not installed and no managed shell configuration was found."
+  fi
+}
+
+status() {
+  info "Homebrew status"
+  printf '  prefix:          %s\n' "$HOMEBREW_PREFIX"
+  if [[ -x "$BREW_BIN" ]]; then
+    printf '  installation:    installed\n'
+    printf '  version:         %s\n' "$("$BREW_BIN" --version | head -n 1)"
+  else
+    printf '  installation:    not installed\n'
+  fi
+
+  for rc_file in "$HOME/.bashrc" "$HOME/.zshrc"; do
+    if [[ -f "$rc_file" ]] && grep -q "$START_MARKER" "$rc_file"; then
+      printf '  %-16s configured\n' "$rc_file:"
+    else
+      printf '  %-16s not configured\n' "$rc_file:"
+    fi
+  done
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  -u | --uninstall)
+    ACTION="uninstall"
+    shift
+    ;;
+  --status)
+    ACTION="status"
+    shift
+    ;;
+  *)
+    error "Unknown option: $1"
+    usage >&2
+    exit 1
+    ;;
+  esac
+done
+
+case "$ACTION" in
+install)
+  install
+  ;;
+uninstall)
+  uninstall
+  ;;
+status)
+  status
+  ;;
+esac
