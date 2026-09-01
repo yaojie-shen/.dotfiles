@@ -1,0 +1,182 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+ACTION="install"
+VERSION="3.7c"
+PREFIX="/usr/local"
+TMUX_BIN="$PREFIX/bin/tmux"
+TMP_DIR=""
+
+DEVBOX_UTILS="${DEVBOX_UTILS:-${DEVBOX_ROOT:-${HOME}/.devbox}/libexec/devbox-utils}"
+if [[ ! -f "$DEVBOX_UTILS" ]]; then
+  echo "Error: devbox-utils not found at: $DEVBOX_UTILS" >&2
+  exit 1
+fi
+# shellcheck disable=SC1090
+source "$DEVBOX_UTILS"
+
+if [[ "$(uname -s)" != "Linux" ]]; then
+  error "tmux setup only supports Linux"
+  exit 1
+fi
+
+cleanup() {
+  [[ -z "$TMP_DIR" ]] || rm -rf "$TMP_DIR"
+}
+trap cleanup EXIT
+
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") [options]
+
+Behavior:
+  - Builds tmux from the official release tarball and installs it to $PREFIX
+    (Linux only).
+  - Building against the system glibc avoids the Homebrew-bottle glibc
+    conflict on hosts that export a global LD_LIBRARY_PATH.
+  - Skips the build when the requested version is already installed.
+
+Options:
+  -h, --help           Show this help message
+  -v, --version <ver>  Install a specific release (default: $VERSION)
+  -u, --uninstall      Remove the tmux installed to $PREFIX
+  --status             Show the installation status
+
+Examples:
+  $(basename "$0")
+  $(basename "$0") --version 3.5a
+  $(basename "$0") --status
+EOF
+}
+
+run_root() {
+  if [[ "$(id -u)" -eq 0 ]]; then
+    "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo "$@"
+  else
+    error "Root privileges are required for: $*"
+    exit 1
+  fi
+}
+
+installed_version() {
+  [[ -x "$TMUX_BIN" ]] || return 1
+  "$TMUX_BIN" -V 2>/dev/null | sed -n 's/^tmux \(.*\)$/\1/p'
+}
+
+install_build_deps() {
+  local pm
+  pm="$(detect_package_manager)"
+  case "$pm" in
+  apt-get)
+    info "Installing build dependencies via apt-get"
+    run_root apt-get install -y gcc binutils make pkg-config bison libevent-dev libncurses-dev
+    ;;
+  *)
+    warning "Unsupported package manager '$pm'; assuming build dependencies are present"
+    ;;
+  esac
+}
+
+install() {
+  local current
+  if current="$(installed_version)" && [[ "$current" == "$VERSION" ]]; then
+    success "tmux $VERSION is already installed at $TMUX_BIN"
+    return
+  fi
+
+  install_build_deps
+
+  TMP_DIR="$(mktemp -d)"
+  local tarball="https://github.com/tmux/tmux/releases/download/${VERSION}/tmux-${VERSION}.tar.gz"
+  info "Downloading $tarball"
+  curl -fsSL "$tarball" | tar -xz -C "$TMP_DIR"
+
+  info "Building tmux $VERSION"
+  (
+    # Build with the system toolchain even when something (e.g. brew shellenv)
+    # has prepended dirs with incompatible gcc/binutils to PATH.
+    export PATH="/usr/bin:/bin:$PATH"
+    cd "$TMP_DIR/tmux-$VERSION"
+    ./configure --prefix="$PREFIX" >/dev/null
+    make -j"$(nproc 2>/dev/null || echo 4)" >/dev/null
+  )
+
+  info "Installing to $PREFIX"
+  run_root make -C "$TMP_DIR/tmux-$VERSION" install >/dev/null
+
+  success "Installed: $("$TMUX_BIN" -V)"
+  if command -v tmux >/dev/null 2>&1 && [[ "$(command -v tmux)" != "$TMUX_BIN" ]]; then
+    warning "'tmux' currently resolves to $(command -v tmux); open a new shell or run: hash -r"
+  fi
+  info "A running tmux server keeps its old version until all sessions exit."
+}
+
+uninstall() {
+  if [[ -x "$TMUX_BIN" ]]; then
+    info "Removing $TMUX_BIN and its man page"
+    run_root rm -f "$TMUX_BIN" "$PREFIX/share/man/man1/tmux.1"
+    success "tmux was removed from $PREFIX"
+  else
+    warning "tmux is not installed at $TMUX_BIN"
+  fi
+}
+
+status() {
+  info "tmux status"
+  local current
+  if current="$(installed_version)"; then
+    printf '  %s: %s\n' "$TMUX_BIN" "$current"
+  else
+    printf '  %s: not installed\n' "$TMUX_BIN"
+  fi
+  if command -v tmux >/dev/null 2>&1; then
+    printf '  resolved tmux: %s (%s)\n' "$(command -v tmux)" "$(tmux -V 2>&1)"
+  else
+    printf '  resolved tmux: not on PATH\n'
+  fi
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  -v | --version)
+    [[ $# -ge 2 ]] || {
+      error "--version requires an argument"
+      exit 1
+    }
+    VERSION="$2"
+    shift 2
+    ;;
+  -u | --uninstall)
+    ACTION="uninstall"
+    shift
+    ;;
+  --status)
+    ACTION="status"
+    shift
+    ;;
+  *)
+    error "Unknown option: $1"
+    usage >&2
+    exit 1
+    ;;
+  esac
+done
+
+case "$ACTION" in
+install)
+  install
+  ;;
+uninstall)
+  uninstall
+  ;;
+status)
+  status
+  ;;
+esac

@@ -93,6 +93,7 @@
       if: '[ ! -e "$HOME/.claude/statusline.js" ] || [ -L "$HOME/.claude/statusline.js" ]'
     ~/.condarc:
     ~/.tmux.conf:
+    ~/.tmux/catppuccin.conf: tmux/catppuccin.conf
     ~/.tmux/scripts: tmux/scripts
     ~/.config/workmux/config.yaml: config/workmux/config.yaml
     ~/.config/uv/uv.toml: config/uv/uv.toml
