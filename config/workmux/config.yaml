@@ -1,0 +1,27 @@
+nerdfont: true
+agent: codex
+status_format: false
+
+status_icons:
+  working: "󰚩"
+  waiting: "󰋼"
+  done: "󰄬"
+
+panes:
+  - command: <agent>
+    focus: true
+  - split: horizontal
+    size: 12
+
+sidebar:
+  position: left
+  width: 44
+  layout: tiles
+  sort: recency
+  dim_stale: true
+  templates:
+    compact: "{status_icon} {window_index} {agent_icon} #[bold]{primary}#[nobold] {fill} {elapsed}"
+    tiles:
+      - "{agent_icon} #[bold]{pane_title}#[nobold] {pane_suffix} {fill} {elapsed}"
+      - "{primary} {fill} {git_stats}"
+      - "{git_branch} {git_ahead} {git_behind} {git_dirty} {git_conflict} {fill} {pr_number} {pr_checks}"

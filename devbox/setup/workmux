@@ -1,0 +1,214 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+ACTION="install"
+WORKMUX_VERSION="latest"
+INSTALL_DIR="${WORKMUX_INSTALL_DIR:-${HOME}/.local/bin}"
+RUN_SETUP=0
+TMP_DIR=""
+
+DEVBOX_UTILS="${DEVBOX_UTILS:-${DEVBOX_ROOT:-${HOME}/.devbox}/libexec/devbox-utils}"
+if [[ ! -f "$DEVBOX_UTILS" ]]; then
+  echo "Error: devbox-utils not found at: $DEVBOX_UTILS" >&2
+  exit 1
+fi
+# shellcheck disable=SC1090
+source "$DEVBOX_UTILS"
+
+if [[ "$(uname -s)" == "Darwin" && -d /opt/homebrew/bin ]]; then
+  PATH="/opt/homebrew/bin:$PATH"
+fi
+
+cleanup() {
+  [[ -z "$TMP_DIR" ]] || rm -rf "$TMP_DIR"
+}
+trap cleanup EXIT
+
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") [options]
+
+Install workmux from its official prebuilt release for macOS or Linux.
+
+Options:
+  -h, --help              Show this help message
+  -u, --uninstall         Remove the standalone workmux binary
+  --upgrade               Install workmux again even when it already exists
+  --setup                 Install agent status hooks after installing workmux
+  --version <VERSION>     Install a specific release (default: latest)
+  --install-dir <DIR>     Install directory (default: ~/.local/bin)
+EOF
+}
+
+require_value() {
+  local option="${1:-}"
+  local value="${2:-}"
+
+  if [[ -z "$value" || "$value" == -* ]]; then
+    error "Missing value for $option"
+    return 1
+  fi
+}
+
+release_platform() {
+  local os arch
+
+  case "$(uname -s)" in
+  Darwin) os="darwin" ;;
+  Linux) os="linux" ;;
+  *)
+    error "Unsupported OS: $(uname -s). workmux provides binaries for macOS and Linux only."
+    return 1
+    ;;
+  esac
+
+  case "$(uname -m)" in
+  arm64 | aarch64) arch="arm64" ;;
+  x86_64 | amd64) arch="amd64" ;;
+  *)
+    error "Unsupported architecture: $(uname -m). workmux provides amd64 and arm64 binaries only."
+    return 1
+    ;;
+  esac
+
+  printf '%s-%s\n' "$os" "$arch"
+}
+
+checksum() {
+  local file="$1"
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$file" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$file" | awk '{print $1}'
+  else
+    error "sha256sum or shasum is required to verify the workmux download"
+    return 1
+  fi
+}
+
+check_requirements() {
+  local missing=()
+
+  command -v curl >/dev/null 2>&1 || missing+=("curl")
+  command -v tar >/dev/null 2>&1 || missing+=("tar")
+  command -v git >/dev/null 2>&1 || missing+=("git")
+  command -v tmux >/dev/null 2>&1 || missing+=("tmux")
+
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    error "Missing required commands: ${missing[*]}"
+    return 1
+  fi
+}
+
+install() {
+  local bin_path platform version archive archive_path checksum_path
+  local release_url expected actual extracted_bin
+
+  bin_path="${INSTALL_DIR%/}/workmux"
+  if [[ -x "$bin_path" && "$ACTION" != "upgrade" ]]; then
+    success "workmux is already installed: $bin_path"
+  else
+    check_requirements
+    platform="$(release_platform)"
+
+    if [[ "$WORKMUX_VERSION" == "latest" ]]; then
+      version="latest"
+      release_url="https://github.com/raine/workmux/releases/latest/download"
+    else
+      version="v${WORKMUX_VERSION#v}"
+      release_url="https://github.com/raine/workmux/releases/download/${version}"
+    fi
+
+    archive="workmux-${platform}.tar.gz"
+    TMP_DIR="$(mktemp -d)"
+    archive_path="$TMP_DIR/$archive"
+    checksum_path="$TMP_DIR/${archive%.tar.gz}.sha256"
+
+    info "Downloading workmux ${version} for ${platform}..."
+    curl -fsSL --retry 3 --connect-timeout 10 --max-time 120 \
+      "$release_url/$archive" -o "$archive_path"
+    curl -fsSL --retry 3 --connect-timeout 10 --max-time 30 \
+      "$release_url/${archive%.tar.gz}.sha256" -o "$checksum_path"
+
+    expected="$(awk '{print $1; exit}' "$checksum_path")"
+    actual="$(checksum "$archive_path")"
+    if [[ -z "$expected" || "$actual" != "$expected" ]]; then
+      error "workmux checksum verification failed"
+      return 1
+    fi
+
+    tar -xzf "$archive_path" -C "$TMP_DIR"
+    extracted_bin="$TMP_DIR/workmux"
+    if [[ ! -f "$extracted_bin" ]]; then
+      error "workmux binary was not found in the downloaded archive"
+      return 1
+    fi
+
+    mkdir -p "$INSTALL_DIR"
+    chmod +x "$extracted_bin"
+    mv -f "$extracted_bin" "$bin_path"
+    success "workmux installed successfully: $bin_path"
+  fi
+
+  if [[ "$RUN_SETUP" -eq 1 ]]; then
+    info "Installing workmux agent status hooks..."
+    "$bin_path" setup --hooks
+  fi
+}
+
+uninstall() {
+  local bin_path="${INSTALL_DIR%/}/workmux"
+
+  if [[ ! -f "$bin_path" ]]; then
+    warning "workmux is not installed at $bin_path"
+    return 0
+  fi
+
+  rm -f "$bin_path"
+  success "workmux uninstalled: $bin_path"
+  warning "workmux configuration and agent hooks were left unchanged"
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  -u | --uninstall)
+    ACTION="uninstall"
+    shift
+    ;;
+  --upgrade)
+    ACTION="upgrade"
+    shift
+    ;;
+  --setup)
+    RUN_SETUP=1
+    shift
+    ;;
+  --version)
+    require_value "$1" "${2:-}"
+    WORKMUX_VERSION="$2"
+    shift 2
+    ;;
+  --install-dir)
+    require_value "$1" "${2:-}"
+    INSTALL_DIR="$2"
+    shift 2
+    ;;
+  *)
+    error "Unknown option: $1"
+    usage >&2
+    exit 1
+    ;;
+  esac
+done
+
+if [[ "$ACTION" == "uninstall" ]]; then
+  uninstall
+else
+  install
+fi

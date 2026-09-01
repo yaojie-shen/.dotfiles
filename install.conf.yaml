@@ -94,7 +94,8 @@
     ~/.condarc:
     ~/.tmux.conf:
     ~/.tmux/scripts: tmux/scripts
-    ~/.config/uv/uv.toml: uv/uv.toml
+    ~/.config/workmux/config.yaml: config/workmux/config.yaml
+    ~/.config/uv/uv.toml: config/uv/uv.toml
     ~/.persistent:
     ~/.shell:
     ~/.devbox:
