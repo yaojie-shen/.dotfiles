@@ -20,15 +20,60 @@ history_limit=1000
 COLOR_RESET=$'\033[0m'
 COLOR_BOLD=$'\033[1m'
 COLOR_DIM=$'\033[2m'
-COLOR_REVERSE=$'\033[7m'
 COLOR_RED=$'\033[31m'
 COLOR_GREEN=$'\033[32m'
 COLOR_YELLOW=$'\033[33m'
 COLOR_BLUE=$'\033[34m'
 COLOR_MAGENTA=$'\033[35m'
 COLOR_CYAN=$'\033[36m'
-COLOR_BG_BLUE=$'\033[44m'
-COLOR_WHITE=$'\033[37m'
+screen_theme="dark"
+
+set_screen_theme() {
+  screen_theme="$1"
+  if [[ "$screen_theme" == "light" ]]; then
+    # Catppuccin Latte
+    COLOR_RED=$'\033[38;2;210;15;57m'
+    COLOR_GREEN=$'\033[38;2;64;160;43m'
+    COLOR_YELLOW=$'\033[38;2;223;142;29m'
+    COLOR_MAGENTA=$'\033[38;2;136;57;239m'
+    COLOR_CYAN=$'\033[38;2;4;165;229m'
+    COLOR_LABEL=$'\033[38;2;23;74;156m'
+    COLOR_VALUE=$'\033[38;2;76;79;105m'
+    COLOR_MUTED=$'\033[38;2;124;127;147m'
+    COLOR_BG_SCAN=$'\033[48;2;239;241;245m'
+    COLOR_BG_SUMMARY="$COLOR_BG_SCAN"
+    COLOR_BG_HEADER=$'\033[48;2;188;192;204m'
+    COLOR_BG_SELECTED=$'\033[48;2;220;224;232m'
+    COLOR_BG_FOOTER=$'\033[48;2;204;208;218m'
+    COLOR_FOOTER_TEXT=$'\033[38;2;76;79;105m'
+    COLOR_FOOTER_MUTED=$'\033[38;2;108;111;133m'
+    COLOR_BG_FOOTER_KEY=$'\033[48;2;30;102;245m'
+    COLOR_FOOTER_KEY=$'\033[38;2;239;241;245m'
+    COLOR_BG_FOOTER_QUIT=$'\033[48;2;210;15;57m'
+  else
+    # Catppuccin Mocha
+    COLOR_RED=$'\033[38;2;243;139;168m'
+    COLOR_GREEN=$'\033[38;2;166;227;161m'
+    COLOR_YELLOW=$'\033[38;2;249;226;175m'
+    COLOR_MAGENTA=$'\033[38;2;203;166;247m'
+    COLOR_CYAN=$'\033[38;2;137;220;235m'
+    COLOR_LABEL=$'\033[38;2;137;180;250m'
+    COLOR_VALUE=$'\033[38;2;166;173;200m'
+    COLOR_MUTED=$'\033[38;2;147;153;178m'
+    COLOR_BG_SCAN=$'\033[48;2;30;30;46m'
+    COLOR_BG_SUMMARY="$COLOR_BG_SCAN"
+    COLOR_BG_HEADER=$'\033[48;2;69;71;90m'
+    COLOR_BG_SELECTED=$'\033[48;2;88;91;112m'
+    COLOR_BG_FOOTER=$'\033[48;2;49;50;68m'
+    COLOR_FOOTER_TEXT=$'\033[38;2;205;214;244m'
+    COLOR_FOOTER_MUTED=$'\033[38;2;166;173;200m'
+    COLOR_BG_FOOTER_KEY=$'\033[48;2;137;180;250m'
+    COLOR_FOOTER_KEY=$'\033[38;2;17;17;27m'
+    COLOR_BG_FOOTER_QUIT=$'\033[48;2;243;139;168m'
+  fi
+}
+
+set_screen_theme "$screen_theme"
 
 usage() {
   local cmd
@@ -59,7 +104,11 @@ options:
 
 screen UI keys:
   h / ?                Show all screen UI keys
+  t                    Re-detect the terminal theme
   Esc                  Close help panel only
+
+During parallel recursive scans, the screen status shows folders as
+scanned/discovered. The discovered total grows as workers find subdirectories.
 
 examples:
   ${cmd} ./output.jsonl
@@ -100,19 +149,21 @@ count_target() {
 
   if [[ "$recursive" -eq 1 ]]; then
     if [[ "$parallel" -gt 0 ]] && command -v python3 >/dev/null 2>&1; then
-      python3 - "$target" "$name_pattern" "$parallel" <<'PY'
+      python3 - "$target" "$name_pattern" "$parallel" "${scan_progress_file:-}" <<'PY'
 import fnmatch
 import multiprocessing as mp
 import os
 import sys
+import threading
 
-target, name_pattern, parallel = sys.argv[1], sys.argv[2], int(sys.argv[3])
+target, name_pattern, parallel, progress_file = sys.argv[1:]
+parallel = int(parallel)
 try:
     mp.set_start_method("fork")
 except RuntimeError:
     pass
 
-def worker(dir_queue, result_queue):
+def worker(dir_queue, result_queue, folder_progress):
     count = 0
     while True:
         path = dir_queue.get()
@@ -124,6 +175,9 @@ def worker(dir_queue, result_queue):
                 for entry in entries:
                     try:
                         if entry.is_dir(follow_symlinks=False):
+                            if folder_progress is not None:
+                                with folder_progress.get_lock():
+                                    folder_progress[1] += 1
                             dir_queue.put(entry.path)
                         elif entry.is_file(follow_symlinks=False):
                             if not name_pattern or fnmatch.fnmatchcase(entry.name, name_pattern):
@@ -133,16 +187,50 @@ def worker(dir_queue, result_queue):
         except OSError:
             pass
         finally:
+            if folder_progress is not None:
+                with folder_progress.get_lock():
+                    folder_progress[0] += 1
             dir_queue.task_done()
     result_queue.put(count)
 
 dir_queue = mp.JoinableQueue()
 result_queue = mp.Queue()
-processes = [mp.Process(target=worker, args=(dir_queue, result_queue)) for _ in range(parallel)]
+folder_progress = mp.Array("Q", (0, 1)) if progress_file else None
+progress_stop = threading.Event()
+
+def write_progress():
+    if folder_progress is None:
+        return
+    with folder_progress.get_lock():
+        scanned, discovered = folder_progress[:]
+    try:
+        with open(progress_file + ".tmp", "w", encoding="ascii") as file:
+            file.write(f"{scanned} {discovered}\n")
+        os.replace(progress_file + ".tmp", progress_file)
+    except OSError:
+        pass
+
+def report_progress():
+    while not progress_stop.wait(0.1):
+        write_progress()
+
+processes = [
+    mp.Process(target=worker, args=(dir_queue, result_queue, folder_progress))
+    for _ in range(parallel)
+]
 for process in processes:
     process.start()
+progress_thread = None
+if progress_file:
+    write_progress()
+    progress_thread = threading.Thread(target=report_progress, daemon=True)
+    progress_thread.start()
 dir_queue.put(target)
 dir_queue.join()
+if progress_thread is not None:
+    progress_stop.set()
+    progress_thread.join()
+    write_progress()
 for _ in processes:
     dir_queue.put(None)
 dir_queue.join()
@@ -320,6 +408,33 @@ format_header() {
   fi
 }
 
+# Format an ETA from a remaining item count and per-second rate.
+format_eta() {
+  local remaining="$1"
+  local rate="$2"
+
+  awk -v remain="$remaining" -v rate="$rate" 'BEGIN {
+    if (remain <= 0) {
+      printf "done"
+    } else if (rate <= 0) {
+      printf "--"
+    } else {
+      sec = int(remain / rate + 0.5)
+      day = int(sec / 86400)
+      sec = sec % 86400
+      hour = int(sec / 3600)
+      sec = sec % 3600
+      minute = int(sec / 60)
+      second = sec % 60
+      if (day > 0) {
+        printf "%dd%02d:%02d:%02d", day, hour, minute, second
+      } else {
+        printf "%02d:%02d:%02d", hour, minute, second
+      }
+    }
+  }'
+}
+
 # Format one already-computed sample row. This is intentionally side-effect free so
 # append mode can print it directly and screen mode can store it in history_rows.
 format_sample() {
@@ -334,26 +449,7 @@ format_sample() {
   if [[ "$total" -gt 0 ]]; then
     progress="$(awk -v c="$count" -v t="$total" 'BEGIN { printf "%.1f%%", c * 100 / t }')"
     remaining=$((total - count))
-    eta="$(awk -v remain="$remaining" -v rate="$smooth" 'BEGIN {
-      if (remain <= 0) {
-        printf "done"
-      } else if (rate <= 0) {
-        printf "--"
-      } else {
-        sec = int(remain / rate + 0.5)
-        day = int(sec / 86400)
-        sec = sec % 86400
-        hour = int(sec / 3600)
-        sec = sec % 3600
-        minute = int(sec / 60)
-        second = sec % 60
-        if (day > 0) {
-          printf "%dd%02d:%02d:%02d", day, hour, minute, second
-        } else {
-          printf "%02d:%02d:%02d", hour, minute, second
-        }
-      }
-    }')"
+    eta="$(format_eta "$remaining" "$smooth")"
     printf '%-8s %8d %12d %+9d %9s %12s %12.4f %12.4f %12.2f' \
       "$(date +%H:%M:%S)" "$scan_s" "$count" "$delta" "$progress" "$eta" "$raw" "$smooth" "$smooth_min"
   else
@@ -401,6 +497,10 @@ update_sample_from_count() {
   smooth_min="$(awk -v s="$smooth" 'BEGIN { printf "%.2f", s * 60 }')"
   sample_line="$(format_sample "$scan_s" "$now_count" "$delta" "$raw" "$smooth" "$smooth_min")"
 
+  current_scan_s="$scan_s"
+  current_count="$now_count"
+  current_delta="$delta"
+
   prev_count="$now_count"
   prev_time="$now_time"
 }
@@ -430,6 +530,9 @@ format_scan_result() {
     initial_scan_s="$scan_s"
     smooth="0.0000"
     sample_line="$(format_sample "$scan_s" "$now_count" 0 "0.0000" "$smooth" "0.00")"
+    current_scan_s="$scan_s"
+    current_count="$now_count"
+    current_delta=0
     prev_count="$now_count"
     prev_time="$now_time"
     screen_has_baseline=1
@@ -446,6 +549,9 @@ start_async_scan() {
 
   scan_status="running"
   scan_file="$(mktemp /tmp/file_growth_scan.XXXXXX)"
+  scan_progress_file="${scan_file}.progress"
+  scan_folders_scanned=0
+  scan_folders_discovered=1
   (
     scan_start="$(date +%s)"
     scan_count="$(count_target)"
@@ -454,6 +560,21 @@ start_async_scan() {
     mv "${scan_file}.tmp" "$scan_file"
   ) &
   scan_pid="$!"
+}
+
+# Refresh live folder progress published by the parallel recursive scanner.
+# Returns success only when the displayed counters changed.
+refresh_scan_progress() {
+  local folders_scanned folders_discovered
+  [[ "${scan_tracks_folders:-0}" -eq 1 ]] || return 1
+  [[ -n "${scan_progress_file:-}" && -s "$scan_progress_file" ]] || return 1
+  read -r folders_scanned folders_discovered < "$scan_progress_file"
+  [[ "$folders_scanned" =~ ^[0-9]+$ && "$folders_discovered" =~ ^[1-9][0-9]*$ ]] || return 1
+  if [[ "$folders_scanned" == "$scan_folders_scanned" && "$folders_discovered" == "$scan_folders_discovered" ]]; then
+    return 1
+  fi
+  scan_folders_scanned="$folders_scanned"
+  scan_folders_discovered="$folders_discovered"
 }
 
 # Collect a completed background count. Returns success only when sample_line has
@@ -473,9 +594,11 @@ collect_async_scan() {
 
   wait "$scan_pid" 2>/dev/null || true
   scan_pid=""
+  refresh_scan_progress || true
   read -r scan_s now_count now_time < "$scan_file"
-  rm -f "$scan_file" "$scan_file.tmp"
+  rm -f "$scan_file" "$scan_file.tmp" "$scan_progress_file" "$scan_progress_file.tmp"
   scan_file=""
+  scan_progress_file=""
   scan_status="idle"
   format_scan_result "$scan_s" "$now_count" "$now_time"
   return 0
@@ -501,21 +624,139 @@ run_append() {
   done
 }
 
+# Parse one keyboard or terminal-protocol event from the shared PTY input.
+# Theme reports must be consumed as a unit so their digits never become keys.
+read_input_event() {
+  local timeout="${1:-1}" first next char sequence="" osc_regex
+
+  input_event=""
+  input_value=""
+  read -rsn1 -t "$timeout" first <&3 || return 1
+  if [[ "$first" != $'\033' ]]; then
+    input_event="key"
+    input_value="$first"
+    return 0
+  fi
+
+  if ! read -rsn1 -t 1 next <&3; then
+    input_event="key"
+    input_value="$first"
+    return 0
+  fi
+
+  if [[ "$next" == "[" ]]; then
+    sequence=$'\033['
+    while [[ "${#sequence}" -lt 32 ]] && read -rsn1 -t 1 char <&3; do
+      sequence+="$char"
+      [[ "$char" == [[:alpha:]~] ]] && break
+    done
+    case "$sequence" in
+      $'\033[?997;1n')
+        set_screen_theme "dark"
+        input_event="theme"
+        ;;
+      $'\033[?997;2n')
+        set_screen_theme "light"
+        input_event="theme"
+        ;;
+      *)
+        input_event="key"
+        input_value="$sequence"
+        ;;
+    esac
+    return 0
+  fi
+
+  if [[ "$next" == "]" ]]; then
+    while [[ "${#sequence}" -lt 96 ]] && read -rsn1 -t 1 char <&3; do
+      [[ "$char" == $'\a' ]] && break
+      if [[ "$char" == $'\033' ]]; then
+        if ! read -rsn1 -t 1 next <&3; then
+          sequence+="$char"
+          break
+        fi
+        if [[ "$next" == "\\" ]]; then
+          break
+        fi
+        sequence+="$char$next"
+      else
+        sequence+="$char"
+      fi
+    done
+    osc_regex='^11;rgb:([[:xdigit:]]{1,4})/([[:xdigit:]]{1,4})/([[:xdigit:]]{1,4})$'
+    if [[ "$sequence" =~ $osc_regex ]]; then
+      set_theme_from_rgb "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
+      input_event="theme"
+    else
+      input_event="terminal"
+    fi
+    return 0
+  fi
+
+  input_event="key"
+  input_value="${first}${next}"
+}
+
+# Classify an OSC 11 RGB response. Components may use 4, 8, 12, or 16 bits.
+set_theme_from_rgb() {
+  local red_hex="$1" green_hex="$2" blue_hex="$3"
+  local red green blue red_max green_max blue_max detected_theme
+
+  red=$((16#$red_hex))
+  green=$((16#$green_hex))
+  blue=$((16#$blue_hex))
+  case "${#red_hex}" in 1) red_max=15 ;; 2) red_max=255 ;; 3) red_max=4095 ;; *) red_max=65535 ;; esac
+  case "${#green_hex}" in 1) green_max=15 ;; 2) green_max=255 ;; 3) green_max=4095 ;; *) green_max=65535 ;; esac
+  case "${#blue_hex}" in 1) blue_max=15 ;; 2) blue_max=255 ;; 3) blue_max=4095 ;; *) blue_max=65535 ;; esac
+  detected_theme="$(awk -v r="$red" -v g="$green" -v b="$blue" \
+    -v rm="$red_max" -v gm="$green_max" -v bm="$blue_max" \
+    'BEGIN { print (0.299*r/rm + 0.587*g/gm + 0.114*b/bm > 0.5) ? "light" : "dark" }')"
+  set_screen_theme "$detected_theme"
+}
+
+# Query the semantic scheme first, then fall back to the actual background.
+query_screen_theme() {
+  printf '\033[?996n'
+  if read_input_event 1 && [[ "$input_event" == "theme" ]]; then
+    return 0
+  fi
+  printf '\033]11;?\033\\'
+  if read_input_event 1 && [[ "$input_event" == "theme" ]]; then
+    return 0
+  fi
+  return 1
+}
+
+initialize_screen_theme() {
+  local fallback="${COLORFGBG:-}"
+
+  fallback="${fallback##*;}"
+
+  if [[ "$fallback" =~ ^[0-9]+$ && "$fallback" -ge 8 ]]; then
+    set_screen_theme "light"
+  else
+    set_screen_theme "dark"
+  fi
+  printf '\033[?2031h'
+  query_screen_theme || true
+}
+
 # Enter alternate-screen mode and configure /dev/tty for non-blocking key reads.
 setup_screen() {
-  if exec 3</dev/tty 2>/dev/null; then
+  if { exec 3</dev/tty; } 2>/dev/null; then
     :
-  elif exec 3<&0 2>/dev/null; then
+  elif { exec 3<&0; } 2>/dev/null; then
     :
   else
     die "interactive screen UI requires a terminal; use --append for stable append output"
   fi
   saved_stty="$(stty -g <&3 2>/dev/null || true)"
+  trap 'cleanup_screen; exit 130' INT TERM
+  trap 'cleanup_screen' EXIT
   printf '\033[?1049h'
   tput civis 2>/dev/null || true
   stty -echo -icanon time 0 min 0 <&3 2>/dev/null || true
-  trap 'cleanup_screen; exit 130' INT TERM
-  trap 'cleanup_screen' EXIT
+  initialize_screen_theme
 }
 
 # Restore terminal state and stop any in-flight async scan.
@@ -528,12 +769,15 @@ cleanup_screen() {
   if [[ -n "${scan_file:-}" ]]; then
     rm -f "$scan_file" "$scan_file.tmp"
   fi
+  if [[ -n "${scan_progress_file:-}" ]]; then
+    rm -f "$scan_progress_file" "$scan_progress_file.tmp"
+  fi
   if [[ -n "${saved_stty:-}" ]]; then
     stty "$saved_stty" <&3 2>/dev/null || true
   fi
   exec 3<&- 2>/dev/null || true
   tput cnorm 2>/dev/null || true
-  printf '\033[?1049l'
+  printf '\033[?2031l\033[?1049l'
 }
 
 # Return current terminal row count for screen layout; falls back to 24.
@@ -560,24 +804,11 @@ terminal_cols() {
   fi
 }
 
-# Print a possibly-colored screen line. The first argument is the printable text
-# used for length checks; the second may contain ANSI color sequences.
-screen_line() {
-  local visible="$1"
-  local colored="$2"
-  local cols="$3"
-  if [[ "${#visible}" -gt "$cols" ]]; then
-    printf '%.*s\n' "$cols" "$visible"
-  else
-    printf '%s\n' "$colored"
-  fi
-}
-
 # Wait without assuming whether a missing target will become a file or a
 # directory. Screen mode redraws a compact waiting view; append mode emits
 # timestamped state changes suitable for logs.
 wait_for_target() {
-  local key title_line status_line hint_line
+  local title_line status_line hint_line cols
 
   [[ -f "$target" || -d "$target" ]] && return 0
 
@@ -594,28 +825,30 @@ wait_for_target() {
   fi
 
   setup_screen
+  cols="$(terminal_cols)"
+  title_line="file_growth $target"
+  status_line="path does not exist; waiting for a file or directory to appear"
+  hint_line="checking once per second; press q to quit"
+  printf '\033[?2026h'
+  draw_screen_row 1 "$title_line" "${COLOR_BOLD}${COLOR_CYAN}file_growth${COLOR_RESET} ${COLOR_MUTED}${target}${COLOR_RESET}" "$cols"
+  draw_screen_row 2 "$status_line" "${COLOR_YELLOW}${status_line}${COLOR_RESET}" "$cols"
+  draw_screen_row 3 "$hint_line" "${COLOR_DIM}${hint_line}${COLOR_RESET}" "$cols"
+  printf '\033[?2026l'
   while [[ ! -f "$target" && ! -d "$target" ]]; do
-    printf '\033[H\033[2J'
-    title_line="file_growth $target"
-    screen_line "$title_line" "${COLOR_BOLD}file_growth${COLOR_RESET} ${COLOR_CYAN}${target}${COLOR_RESET}" "$(terminal_cols)"
-    status_line="path does not exist; waiting for a file or directory to appear"
-    screen_line "$status_line" "${COLOR_YELLOW}${status_line}${COLOR_RESET}" "$(terminal_cols)"
-    hint_line="checking once per second; press q to quit"
-    screen_line "$hint_line" "${COLOR_DIM}${hint_line}${COLOR_RESET}" "$(terminal_cols)"
-
-    if read -rsn1 -t 1 key <&3 && [[ "$key" == "q" ]]; then
-      cleanup_screen
-      return 1
+    if read_input_event 1; then
+      if [[ "$input_event" == "theme" ]]; then
+        printf '\033[?2026h'
+        draw_screen_row 1 "$title_line" "${COLOR_BOLD}${COLOR_CYAN}file_growth${COLOR_RESET} ${COLOR_MUTED}${target}${COLOR_RESET}" "$cols"
+        draw_screen_row 2 "$status_line" "${COLOR_YELLOW}${status_line}${COLOR_RESET}" "$cols"
+        draw_screen_row 3 "$hint_line" "${COLOR_MUTED}${hint_line}${COLOR_RESET}" "$cols"
+        printf '\033[?2026l'
+      elif [[ "$input_event" == "key" && "$input_value" == "q" ]]; then
+        cleanup_screen
+        return 1
+      fi
     fi
   done
   cleanup_screen
-}
-
-# Print a highlighted history row for the current cursor selection.
-selected_line() {
-  local line="$1"
-  local cols="$2"
-  printf '%s%s%-*.*s%s\n' "$COLOR_BG_BLUE" "$COLOR_WHITE" "$cols" "$cols" "$line" "$COLOR_RESET"
 }
 
 # Largest valid history offset for the current viewport height.
@@ -671,38 +904,174 @@ clamp_selection() {
   fi
 }
 
-# Redraw the whole alternate screen: fixed status/header area plus scrollable
-# retained history rows.
-render_screen() {
-  local rows cols body_rows history_body_rows row_count max_start start end i selected_display follow_label total_label header_line title_line status_line keys_line scan_hint scan_hint_visible
-  rows="$(terminal_rows)"
-  cols="$(terminal_cols)"
-  # Leave the terminal's last row unused. Printing a newline on that row would
-  # scroll the alternate screen and push the fixed title off the top.
-  body_rows=$((rows - 5))
-  [[ "$body_rows" -gt 0 ]] || body_rows=1
-  history_body_rows="$body_rows"
-  row_count="${#history_rows[@]}"
-  total_label="-"
-  [[ "$total" -gt 0 ]] && total_label="$total"
+# Append one fixed-width cell to grid_visible/grid_colored.
+append_grid_cell() {
+  local text="$1"
+  local color="$2"
+  local width="$3"
+  local padding
 
-  scan_hint=""
-  scan_hint_visible=0
-  if [[ "${scan_status:-}" == "running" && "$printed" -lt 2 ]]; then
-    if [[ "$printed" -eq 0 ]]; then
-      scan_hint="initial scan is running; counting may take a while..."
+  [[ "$width" -gt 1 ]] || return
+  if [[ "${#text}" -ge "$width" ]]; then
+    text="${text:0:$((width - 1))}"
+  fi
+  printf -v padding '%*s' "$((width - ${#text}))" ''
+  grid_visible+="${text}${padding}"
+  grid_colored+="${color}${text}${padding}${COLOR_RESET}"
+}
+
+# Extend a colored row through the last safe terminal column without triggering
+# autowrap. The metric columns stay compact while their section background spans
+# the pane.
+fill_grid_background() {
+  local cols="$1"
+  local background="$2"
+  local padding_width padding
+
+  padding_width=$((cols - 1 - ${#grid_visible}))
+  [[ "$padding_width" -gt 0 ]] || return 0
+  printf -v padding '%*s' "$padding_width" ''
+  grid_visible+="$padding"
+  grid_colored+="${background}${padding}${COLOR_RESET}"
+}
+
+# Build aligned label/value rows for live scan activity.
+format_scan_activity() {
+  local cols="$1"
+  local status_color scan_time_display baseline_display field_count cell_width last_width
+
+  status_color="$COLOR_YELLOW"
+  [[ "$scan_status" == "idle" ]] && status_color="$COLOR_VALUE"
+  [[ "$scan_status" == "error" ]] && status_color="$COLOR_RED"
+  scan_time_display="--"
+  [[ "$current_scan_s" =~ ^[0-9]+$ ]] && scan_time_display="${current_scan_s}s"
+  baseline_display="pending"
+  [[ "$initial_count" =~ ^[0-9]+$ ]] && baseline_display="${initial_count} (${initial_scan_s}s)"
+
+  # Use the same compact column grid as the summary above. Keeping the fifth
+  # slot empty makes SCAN/LAST/FOLDERS/BASELINE line up with
+  # COUNT/PROGRESS/SMOOTH/ETA instead of spreading four fields across the pane.
+  field_count=4
+  [[ "$total" -gt 0 ]] && field_count=5
+  cell_width=$(((cols - 1) / field_count))
+  [[ "$cell_width" -le 24 ]] || cell_width=24
+  last_width="$cell_width"
+
+  grid_visible=""
+  grid_colored=""
+  append_grid_cell "SCAN" "$COLOR_BG_SCAN$COLOR_BOLD$COLOR_LABEL" "$cell_width"
+  append_grid_cell "LAST" "$COLOR_BG_SCAN$COLOR_BOLD$COLOR_LABEL" "$cell_width"
+  if [[ "${scan_tracks_folders:-0}" -eq 1 ]]; then
+    append_grid_cell "FOLDERS" "$COLOR_BG_SCAN$COLOR_BOLD$COLOR_LABEL" "$cell_width"
+  else
+    append_grid_cell "" "$COLOR_BG_SCAN" "$cell_width"
+  fi
+  append_grid_cell "BASELINE" "$COLOR_BG_SCAN$COLOR_BOLD$COLOR_LABEL" "$last_width"
+  if [[ "$total" -gt 0 ]]; then
+    append_grid_cell "" "$COLOR_BG_SCAN" "$cell_width"
+  fi
+  fill_grid_background "$cols" "$COLOR_BG_SCAN"
+  scan_labels_visible="$grid_visible"
+  scan_labels_colored="$grid_colored"
+
+  grid_visible=""
+  grid_colored=""
+  append_grid_cell "$scan_status" "$COLOR_BG_SCAN$status_color" "$cell_width"
+  append_grid_cell "$scan_time_display" "$COLOR_BG_SCAN$COLOR_VALUE" "$cell_width"
+  if [[ "${scan_tracks_folders:-0}" -eq 1 ]]; then
+    append_grid_cell "${scan_folders_scanned}/${scan_folders_discovered}" "$COLOR_BG_SCAN$COLOR_VALUE" "$cell_width"
+  else
+    append_grid_cell "" "$COLOR_BG_SCAN" "$cell_width"
+  fi
+  append_grid_cell "$baseline_display" "$COLOR_BG_SCAN$COLOR_VALUE" "$last_width"
+  if [[ "$total" -gt 0 ]]; then
+    append_grid_cell "" "$COLOR_BG_SCAN" "$cell_width"
+  fi
+  fill_grid_background "$cols" "$COLOR_BG_SCAN"
+  scan_values_visible="$grid_visible"
+  scan_values_colored="$grid_colored"
+}
+
+# Format a screen table header that fits the current terminal width.
+format_screen_header() {
+  local cols="$1"
+  if [[ "$total" -gt 0 && "$cols" -ge 122 ]] || [[ "$total" -eq 0 && "$cols" -ge 82 ]]; then
+    format_header
+  elif [[ "$total" -gt 0 && "$cols" -ge 71 ]] || [[ "$total" -eq 0 && "$cols" -ge 65 ]]; then
+    if [[ "$total" -gt 0 ]]; then
+      printf '%-8s %12s %9s %12s %12s %12s' "time" "count" "delta" "eta" "raw/s" "smooth/s"
     else
-      scan_hint="second scan is running; waiting for a real time interval before speed calculation..."
+      printf '%-8s %12s %9s %12s %12s' "time" "count" "delta" "raw/s" "smooth/s"
     fi
-    scan_hint_visible=1
-    history_body_rows=$((body_rows - 1))
-    [[ "$history_body_rows" -gt 0 ]] || history_body_rows=1
+  else
+    printf '%-8s %12s %9s %12s' "time" "count" "delta" "smooth/s"
+  fi
+}
+
+# Reformat a retained full sample row for the current terminal width.
+format_screen_sample() {
+  local line="$1"
+  local cols="$2"
+  local time scan_s count delta progress eta raw rate rate_min
+
+  if [[ "$total" -gt 0 ]]; then
+    read -r time scan_s count delta progress eta raw rate rate_min <<< "$line"
+  else
+    read -r time scan_s count delta raw rate rate_min <<< "$line"
+    eta="--"
   fi
 
-  clamp_selection "$history_body_rows"
+  if [[ "$total" -gt 0 && "$cols" -ge 122 ]] || [[ "$total" -eq 0 && "$cols" -ge 82 ]]; then
+    printf '%s' "$line"
+  elif [[ "$total" -gt 0 && "$cols" -ge 71 ]] || [[ "$total" -eq 0 && "$cols" -ge 65 ]]; then
+    if [[ "$total" -gt 0 ]]; then
+      printf '%-8s %12s %9s %12s %12s %12s' "$time" "$count" "$delta" "$eta" "$raw" "$rate"
+    else
+      printf '%-8s %12s %9s %12s %12s' "$time" "$count" "$delta" "$raw" "$rate"
+    fi
+  else
+    printf '%-8s %12s %9s %12s' "$time" "$count" "$delta" "$rate"
+  fi
+}
+
+# Replace one terminal row without printing a newline or triggering autowrap.
+draw_screen_row() {
+  local row="$1"
+  local visible="$2"
+  local colored="$3"
+  local cols="$4"
+
+  printf '\033[%d;1H\033[2K' "$row"
+  if [[ "${#visible}" -ge "$cols" ]]; then
+    printf '%.*s' "$((cols - 1))" "$visible"
+  else
+    printf '%s' "$colored"
+  fi
+}
+
+# Redraw the whole alternate screen: summary, scan activity, history, and a
+# fixed navigation footer.
+render_screen() {
+  local rows cols body_rows row_count max_start start end i frame_row selected_display follow_label
+  local title_line config_line header_line footer_line footer_colored footer_left footer_left_colored footer_right footer_right_colored footer_padding row_text
+  local count_display delta_display smooth_display eta_display remaining progress_display progress_pct bar_width filled_width fill empty field_count cell_width last_width
+  local smooth_color change_color eta_color follow_color include_label scanner footer_base footer_key footer_quit
+  local visible colored previous_visible previous_colored
+  local force_redraw=0
+  local -a frame_visible=()
+  local -a frame_colored=()
+  rows="$(terminal_rows)"
+  cols="$(terminal_cols)"
+  # Seven fixed rows at the top, one footer row, and an unused final row prevent
+  # terminal scrolling when a printed line ends with a newline.
+  body_rows=$((rows - 9))
+  [[ "$body_rows" -gt 0 ]] || body_rows=1
+  row_count="${#history_rows[@]}"
+
+  clamp_selection "$body_rows"
 
   start="$view_start"
-  end=$((start + history_body_rows))
+  end=$((start + body_rows))
   [[ "$end" -le "$row_count" ]] || end="$row_count"
   selected_display=0
   [[ "$selected_index" -ge 0 ]] && selected_display=$((selected_index + 1))
@@ -710,56 +1079,219 @@ render_screen() {
   [[ "$follow" -eq 1 ]] && follow_label="on"
   max_start="$(max_view_start "$body_rows")"
 
-  printf '\033[H\033[2J'
   title_line="file_growth $target"
-  screen_line "$title_line" "${COLOR_BOLD}file_growth${COLOR_RESET} ${COLOR_CYAN}${target}${COLOR_RESET}" "$cols"
-  if [[ "$mode" == "file-lines" || "$mode" == "exec" ]]; then
-    status_line="mode=${mode} interval=${interval}s alpha=${alpha} total=${total_label}"
-  else
-    status_line="mode=${mode} pattern=${name_pattern:-*} interval=${interval}s alpha=${alpha} total=${total_label} include_dirs=${include_dirs} parallel=${parallel}"
-  fi
-  screen_line "$status_line" "${COLOR_DIM}${status_line}${COLOR_RESET}" "$cols"
-  keys_line="initial_count=${initial_count} initial_scan_s=${initial_scan_s}s rows=${row_count} selected=${selected_display}/${row_count} follow=${follow_label} view=${view_start}/${max_start} scan=${scan_status}  press h or ? for help"
-  screen_line "$keys_line" "${COLOR_YELLOW}${keys_line}${COLOR_RESET}" "$cols"
+  frame_visible[0]="$title_line"
+  frame_colored[0]="${COLOR_BOLD}${COLOR_CYAN}file_growth${COLOR_RESET} ${COLOR_MUTED}${target}${COLOR_RESET}"
 
   if [[ "$show_help" -eq 1 ]]; then
-    screen_line "" "" "$cols"
-    screen_line "Screen UI keys" "${COLOR_BOLD}${COLOR_MAGENTA}Screen UI keys${COLOR_RESET}" "$cols"
-    screen_line "  h / ?              Toggle this help panel" "  ${COLOR_BOLD}h / ?${COLOR_RESET}              Toggle this help panel" "$cols"
-    screen_line "  q                  Close help panel; quit from monitor" "  ${COLOR_BOLD}q${COLOR_RESET}                  Close help panel; quit from monitor" "$cols"
-    screen_line "  Esc                Close help panel only" "  ${COLOR_BOLD}Esc${COLOR_RESET}                Close help panel only" "$cols"
-    screen_line "  k / Up             Scroll up to older rows" "  ${COLOR_BOLD}k / Up${COLOR_RESET}             Scroll up to older rows" "$cols"
-    screen_line "  j / Down           Scroll down to newer rows" "  ${COLOR_BOLD}j / Down${COLOR_RESET}           Scroll down to newer rows" "$cols"
-    screen_line "  PageUp / PageDown  Scroll one page" "  ${COLOR_BOLD}PageUp / PageDown${COLOR_RESET}  Scroll one page" "$cols"
-    screen_line "  g                  Jump to oldest retained row" "  ${COLOR_BOLD}g${COLOR_RESET}                  Jump to oldest retained row" "$cols"
-    screen_line "  G / End            Jump to latest row and follow new samples" "  ${COLOR_BOLD}G / End${COLOR_RESET}            Jump to latest row and follow new samples" "$cols"
-    screen_line "" "" "$cols"
-    screen_line "Press h, ?, or q to return to the monitor." "${COLOR_DIM}Press h, ?, or q to return to the monitor.${COLOR_RESET}" "$cols"
-    return
-  fi
+    frame_visible[2]="Screen UI keys"
+    frame_colored[2]="${COLOR_BOLD}${COLOR_MAGENTA}Screen UI keys${COLOR_RESET}"
+    frame_visible[3]="  h / ?              Toggle this help panel"
+    frame_colored[3]="  ${COLOR_BOLD}h / ?${COLOR_RESET}              Toggle this help panel"
+    frame_visible[4]="  q                  Close help panel; quit from monitor"
+    frame_colored[4]="  ${COLOR_BOLD}q${COLOR_RESET}                  Close help panel; quit from monitor"
+    frame_visible[5]="  Esc                Close help panel only"
+    frame_colored[5]="  ${COLOR_BOLD}Esc${COLOR_RESET}                Close help panel only"
+    frame_visible[6]="  k / Up             Scroll up to older rows"
+    frame_colored[6]="  ${COLOR_BOLD}k / Up${COLOR_RESET}             Scroll up to older rows"
+    frame_visible[7]="  j / Down           Scroll down to newer rows"
+    frame_colored[7]="  ${COLOR_BOLD}j / Down${COLOR_RESET}           Scroll down to newer rows"
+    frame_visible[8]="  PageUp / PageDown  Scroll one page"
+    frame_colored[8]="  ${COLOR_BOLD}PageUp / PageDown${COLOR_RESET}  Scroll one page"
+    frame_visible[9]="  g                  Jump to oldest retained row"
+    frame_colored[9]="  ${COLOR_BOLD}g${COLOR_RESET}                  Jump to oldest retained row"
+    frame_visible[10]="  G / End            Jump to latest row and follow new samples"
+    frame_colored[10]="  ${COLOR_BOLD}G / End${COLOR_RESET}            Jump to latest row and follow new samples"
+    frame_visible[11]="  t                  Re-detect the terminal theme"
+    frame_colored[11]="  ${COLOR_BOLD}t${COLOR_RESET}                  Re-detect the terminal theme"
+    frame_visible[12]="Press h, ?, or q to return to the monitor."
+    frame_colored[12]="${COLOR_MUTED}Press h, ?, or q to return to the monitor.${COLOR_RESET}"
+  else
+    delta_display="--"
+    smooth_display="--"
+    eta_display="--"
+    smooth_color="$COLOR_VALUE"
+    change_color="$COLOR_VALUE"
+    eta_color="$COLOR_VALUE"
+    count_display="$current_count"
+    if [[ "$current_count" =~ ^[0-9]+$ ]]; then
+      printf -v delta_display '%+d' "$current_delta"
+      smooth_display="${smooth}/s"
+      [[ "$current_delta" -le 0 ]] || change_color="$COLOR_GREEN"
+      [[ "$current_delta" -ge 0 ]] || change_color="$COLOR_RED"
+      [[ "$smooth" != -* ]] || smooth_color="$COLOR_RED"
+      if [[ "$total" -gt 0 ]]; then
+        count_display="${current_count}/${total}"
+        remaining=$((total - current_count))
+        eta_display="$(format_eta "$remaining" "$smooth")"
+        [[ "$eta_display" == "done" ]] && eta_color="$COLOR_GREEN"
+      fi
+    elif [[ "$total" -gt 0 ]]; then
+      count_display="pending/${total}"
+    fi
 
-  header_line="$(format_header)"
-  screen_line "$header_line" "${COLOR_BOLD}${COLOR_BLUE}${header_line}${COLOR_RESET}" "$cols"
+    field_count=4
+    [[ "$total" -gt 0 ]] && field_count=5
+    cell_width=$(((cols - 1) / field_count))
+    [[ "$cell_width" -le 24 ]] || cell_width=24
+    last_width="$cell_width"
 
-  if [[ "$scan_hint_visible" -eq 1 ]]; then
-    screen_line "$scan_hint" "${COLOR_DIM}${COLOR_YELLOW}${scan_hint}${COLOR_RESET}" "$cols"
-  fi
+    progress_display="pending"
+    if [[ "$total" -gt 0 && "$current_count" =~ ^[0-9]+$ ]]; then
+      progress_pct="$(awk -v c="$current_count" -v t="$total" 'BEGIN { printf "%.1f%%", c * 100 / t }')"
+      progress_display="$progress_pct"
+      bar_width=$((cell_width - ${#progress_pct} - 4))
+      if [[ "$bar_width" -ge 4 ]]; then
+        filled_width="$(awk -v c="$current_count" -v t="$total" -v w="$bar_width" 'BEGIN {
+          filled = int(c * w / t + 0.5)
+          if (filled < 0) filled = 0
+          if (filled > w) filled = w
+          print filled
+        }')"
+        printf -v fill '%*s' "$filled_width" ''
+        printf -v empty '%*s' "$((bar_width - filled_width))" ''
+        fill="${fill// /#}"
+        empty="${empty// /-}"
+        progress_display="${progress_pct} [${fill}${empty}]"
+      fi
+    fi
 
-  for ((i = start; i < end; i++)); do
-    if [[ "$i" -eq "$selected_index" ]]; then
-      selected_line "${history_rows[$i]}" "$cols"
+    grid_visible=""
+    grid_colored=""
+    append_grid_cell "COUNT" "$COLOR_BG_SUMMARY$COLOR_BOLD$COLOR_LABEL" "$cell_width"
+    if [[ "$total" -gt 0 ]]; then
+      append_grid_cell "PROGRESS" "$COLOR_BG_SUMMARY$COLOR_BOLD$COLOR_LABEL" "$cell_width"
+    fi
+    append_grid_cell "SMOOTH" "$COLOR_BG_SUMMARY$COLOR_BOLD$COLOR_LABEL" "$cell_width"
+    if [[ "$total" -gt 0 ]]; then
+      append_grid_cell "ETA" "$COLOR_BG_SUMMARY$COLOR_BOLD$COLOR_LABEL" "$cell_width"
+    fi
+    append_grid_cell "CHANGE" "$COLOR_BG_SUMMARY$COLOR_BOLD$COLOR_LABEL" "$last_width"
+    fill_grid_background "$cols" "$COLOR_BG_SUMMARY"
+    frame_visible[1]="$grid_visible"
+    frame_colored[1]="$grid_colored"
+
+    grid_visible=""
+    grid_colored=""
+    append_grid_cell "$count_display" "$COLOR_BG_SUMMARY$COLOR_VALUE" "$cell_width"
+    if [[ "$total" -gt 0 ]]; then
+      append_grid_cell "$progress_display" "$COLOR_BG_SUMMARY$COLOR_VALUE" "$cell_width"
+    fi
+    append_grid_cell "$smooth_display" "$COLOR_BG_SUMMARY$smooth_color" "$cell_width"
+    if [[ "$total" -gt 0 ]]; then
+      append_grid_cell "$eta_display" "$COLOR_BG_SUMMARY$eta_color" "$cell_width"
+    fi
+    append_grid_cell "$delta_display" "$COLOR_BG_SUMMARY$change_color" "$last_width"
+    fill_grid_background "$cols" "$COLOR_BG_SUMMARY"
+    frame_visible[2]="$grid_visible"
+    frame_colored[2]="$grid_colored"
+
+    format_scan_activity "$cols"
+    frame_visible[3]="$scan_labels_visible"
+    frame_colored[3]="$scan_labels_colored"
+    frame_visible[4]="$scan_values_visible"
+    frame_colored[4]="$scan_values_colored"
+
+    if [[ "$mode" == "file-lines" || "$mode" == "exec" ]]; then
+      config_line="${mode} · every ${interval}s · EMA α ${alpha}"
     else
-      screen_line "${history_rows[$i]}" "${history_rows[$i]}" "$cols"
+      include_label="files only"
+      [[ "$include_dirs" -eq 1 ]] && include_label="files and directories"
+      scanner="find"
+      [[ "$parallel" -gt 0 ]] && scanner="${parallel} workers"
+      config_line="${mode} · pattern ${name_pattern:-*} · every ${interval}s · EMA α ${alpha} · ${include_label} · ${scanner}"
+    fi
+    frame_visible[5]="$config_line"
+    frame_colored[5]="${COLOR_MUTED}${config_line}${COLOR_RESET}"
+
+    header_line="$(format_screen_header "$cols")"
+    grid_visible="$header_line"
+    grid_colored="${COLOR_BG_HEADER}${COLOR_BOLD}${COLOR_LABEL}${header_line}${COLOR_RESET}"
+    fill_grid_background "$cols" "$COLOR_BG_HEADER"
+    frame_visible[6]="$grid_visible"
+    frame_colored[6]="$grid_colored"
+
+    frame_row=7
+    for ((i = start; i < end; i++)); do
+      row_text="$(format_screen_sample "${history_rows[$i]}" "$cols")"
+      frame_visible[$frame_row]="$row_text"
+      if [[ "$i" -eq "$selected_index" ]]; then
+        grid_visible="$row_text"
+        grid_colored="${COLOR_BG_SELECTED}${row_text}${COLOR_RESET}"
+        fill_grid_background "$cols" "$COLOR_BG_SELECTED"
+        frame_visible[$frame_row]="$grid_visible"
+        frame_colored[$frame_row]="$grid_colored"
+      else
+        frame_colored[$frame_row]="$row_text"
+      fi
+      ((frame_row += 1))
+    done
+
+    follow_color="$COLOR_YELLOW"
+    [[ "$follow" -eq 1 ]] && follow_color="$COLOR_GREEN"
+    footer_base="${COLOR_BG_FOOTER}${COLOR_FOOTER_TEXT}"
+    footer_key="${COLOR_BG_FOOTER_KEY}${COLOR_FOOTER_KEY}${COLOR_BOLD}"
+    footer_quit="${COLOR_BG_FOOTER_QUIT}${COLOR_FOOTER_KEY}${COLOR_BOLD}"
+    footer_left="${row_count} samples | selected ${selected_display}/${row_count} | follow ${follow_label} | view ${view_start}/${max_start}"
+    footer_left_colored="${footer_base}${row_count} ${COLOR_FOOTER_MUTED}samples${COLOR_FOOTER_TEXT} | ${COLOR_FOOTER_MUTED}selected ${COLOR_FOOTER_TEXT}${selected_display}/${row_count} | ${COLOR_FOOTER_MUTED}follow ${follow_color}${follow_label}${COLOR_FOOTER_TEXT} | ${COLOR_FOOTER_MUTED}view ${COLOR_FOOTER_TEXT}${view_start}/${max_start}"
+    footer_right=" k/j  navigate |  t  theme |  h  help |  q  quit"
+    footer_right_colored="${footer_key} k/j ${footer_base} navigate | ${footer_key} t ${footer_base} theme | ${footer_key} h ${footer_base} help | ${footer_quit} q ${footer_base} quit"
+    # Keep the last terminal column unused so colors are preserved without
+    # triggering autowrap at the right edge.
+    footer_padding=$((cols - 1 - ${#footer_left} - ${#footer_right}))
+    if [[ "$footer_padding" -ge 2 ]]; then
+      printf -v footer_line '%s%*s%s' "$footer_left" "$footer_padding" '' "$footer_right"
+      printf -v footer_colored '%s%*s%s' "$footer_left_colored" "$footer_padding" '' "$footer_right_colored"
+    elif [[ "$cols" -ge 68 ]]; then
+      footer_line="${selected_display}/${row_count} selected | ${follow_label} |  k/j |  t theme |  h help |  q quit"
+      footer_colored="${footer_base}${selected_display}/${row_count} ${COLOR_FOOTER_MUTED}selected${COLOR_FOOTER_TEXT} | ${follow_color}${follow_label}${COLOR_FOOTER_TEXT} | ${footer_key} k/j ${footer_base}| ${footer_key} t ${footer_base}theme | ${footer_key} h ${footer_base}help | ${footer_quit} q ${footer_base}quit"
+    else
+      footer_line="${selected_display}/${row_count} | ${follow_label} |  k/j |  t |  h |  q"
+      footer_colored="${footer_base}${selected_display}/${row_count} | ${follow_color}${follow_label}${COLOR_FOOTER_TEXT} | ${footer_key} k/j ${footer_base}| ${footer_key} t ${footer_base}| ${footer_key} h ${footer_base}| ${footer_quit} q ${footer_base}"
+    fi
+    grid_visible="$footer_line"
+    grid_colored="${footer_colored}${COLOR_RESET}"
+    fill_grid_background "$cols" "$COLOR_BG_FOOTER"
+    frame_visible[$((rows - 2))]="$grid_visible"
+    frame_colored[$((rows - 2))]="$grid_colored"
+  fi
+
+  if [[ "${screen_prev_rows:-0}" -ne "$rows" || "${screen_prev_cols:-0}" -ne "$cols" ]]; then
+    force_redraw=1
+    screen_prev_visible=()
+    screen_prev_colored=()
+  fi
+
+  printf '\033[?2026h'
+  for ((i = 0; i < rows - 1; i++)); do
+    visible="${frame_visible[$i]:-}"
+    colored="${frame_colored[$i]:-$visible}"
+    previous_visible="${screen_prev_visible[$i]:-}"
+    previous_colored="${screen_prev_colored[$i]:-}"
+    if [[ "$force_redraw" -eq 1 || "$visible" != "$previous_visible" || "$colored" != "$previous_colored" ]]; then
+      draw_screen_row "$((i + 1))" "$visible" "$colored" "$cols"
+      screen_prev_visible[$i]="$visible"
+      screen_prev_colored[$i]="$colored"
     fi
   done
+  printf '\033[?2026l'
+  screen_prev_rows="$rows"
+  screen_prev_cols="$cols"
 }
 
 # Handle one keypress from /dev/tty. Returns non-zero only when the monitor
 # should quit; q in help closes help instead of exiting.
 handle_key() {
-  local key rest page_rows
-  read -rsn1 -t 1 key <&3 || return 0
-  page_rows=$(($(terminal_rows) - 5))
+  local key page_rows previous_theme
+
+  read_input_event 1 || return 0
+  if [[ "$input_event" == "theme" ]]; then
+    screen_needs_render=1
+    return 0
+  fi
+  [[ "$input_event" == "key" ]] || return 0
+  key="$input_value"
+  page_rows=$(($(terminal_rows) - 9))
   [[ "$page_rows" -gt 0 ]] || page_rows=1
 
   case "$key" in
@@ -778,6 +1310,17 @@ handle_key() {
       else
         show_help=1
       fi
+      ;;
+    t)
+      previous_theme="$screen_theme"
+      if ! query_screen_theme; then
+        if [[ "$previous_theme" == "dark" ]]; then
+          set_screen_theme "light"
+        else
+          set_screen_theme "dark"
+        fi
+      fi
+      screen_needs_render=1
       ;;
     k)
       screen_needs_render=1
@@ -802,56 +1345,45 @@ handle_key() {
       follow=1
       selected_index=$((${#history_rows[@]} - 1))
       ;;
-    $'\e')
-      read -rsn1 -t 1 rest <&3 || rest=""
-      if [[ -z "$rest" ]]; then
-        if [[ "$show_help" -eq 1 ]]; then
-          screen_needs_render=1
-          show_help=0
-        fi
-        return 0
+    $'\033')
+      if [[ "$show_help" -eq 1 ]]; then
+        screen_needs_render=1
+        show_help=0
       fi
-      if [[ "$rest" == "[" ]]; then
-        read -rsn1 -t 1 rest <&3 || rest=""
-        case "$rest" in
-          A)
-            screen_needs_render=1
-            show_help=0
-            follow=0
-            selected_index=$((selected_index - 1))
-            ;;
-          B)
-            screen_needs_render=1
-            show_help=0
-            selected_index=$((selected_index + 1))
-            ;;
-          5)
-            read -rsn1 -t 1 rest <&3 || true
-            screen_needs_render=1
-            show_help=0
-            follow=0
-            selected_index=$((selected_index - page_rows))
-            ;;
-          6)
-            read -rsn1 -t 1 rest <&3 || true
-            screen_needs_render=1
-            show_help=0
-            selected_index=$((selected_index + page_rows))
-            ;;
-          F)
-            screen_needs_render=1
-            show_help=0
-            follow=1
-            selected_index=$((${#history_rows[@]} - 1))
-            ;;
-          H)
-            screen_needs_render=1
-            show_help=0
-            follow=0
-            selected_index=0
-            ;;
-        esac
-      fi
+      ;;
+    $'\033[A')
+      screen_needs_render=1
+      show_help=0
+      follow=0
+      selected_index=$((selected_index - 1))
+      ;;
+    $'\033[B')
+      screen_needs_render=1
+      show_help=0
+      selected_index=$((selected_index + 1))
+      ;;
+    $'\033[5~')
+      screen_needs_render=1
+      show_help=0
+      follow=0
+      selected_index=$((selected_index - page_rows))
+      ;;
+    $'\033[6~')
+      screen_needs_render=1
+      show_help=0
+      selected_index=$((selected_index + page_rows))
+      ;;
+    $'\033[F' | $'\033[4~' | $'\033[8~')
+      screen_needs_render=1
+      show_help=0
+      follow=1
+      selected_index=$((${#history_rows[@]} - 1))
+      ;;
+    $'\033[H' | $'\033[1~' | $'\033[7~')
+      screen_needs_render=1
+      show_help=0
+      follow=0
+      selected_index=0
       ;;
   esac
 
@@ -879,7 +1411,7 @@ append_history() {
 
 # Interactive screen UI: async counting, fixed header, retained-history scrolling.
 run_screen() {
-  local next_scan_time now
+  local next_scan_time now cols
   setup_screen
   start_async_scan
   render_screen
@@ -888,6 +1420,17 @@ run_screen() {
   while true; do
     if ! handle_key; then
       break
+    fi
+    if refresh_scan_progress && [[ "$show_help" -eq 0 ]]; then
+      cols="$(terminal_cols)"
+      format_scan_activity "$cols"
+      if [[ "$scan_values_visible" != "${screen_prev_visible[4]:-}" || "$scan_values_colored" != "${screen_prev_colored[4]:-}" ]]; then
+        printf '\033[?2026h'
+        draw_screen_row 5 "$scan_values_visible" "$scan_values_colored" "$cols"
+        printf '\033[?2026l'
+        screen_prev_visible[4]="$scan_values_visible"
+        screen_prev_colored[4]="$scan_values_colored"
+      fi
     fi
     if [[ "$screen_needs_render" -eq 1 ]]; then
       render_screen
@@ -966,8 +1509,22 @@ case "$ui" in
     saved_stty=""
     scan_pid=""
     scan_file=""
+    scan_progress_file=""
     scan_status="idle"
+    scan_folders_scanned=0
+    scan_folders_discovered=1
+    scan_tracks_folders=0
+    if [[ "$mode" == "recursive" && "$parallel" -gt 0 ]] && command -v python3 >/dev/null 2>&1; then
+      scan_tracks_folders=1
+    fi
     screen_has_baseline=0
+    current_scan_s="--"
+    current_count="pending"
+    current_delta=0
+    screen_prev_rows=0
+    screen_prev_cols=0
+    declare -a screen_prev_visible=()
+    declare -a screen_prev_colored=()
     declare -a history_rows=()
     follow=1
     selected_index=-1
