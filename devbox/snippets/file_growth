@@ -757,6 +757,7 @@ setup_screen() {
   saved_stty="$(stty -g <&3 2>/dev/null || true)"
   trap 'cleanup_screen; exit 130' INT TERM
   trap 'cleanup_screen' EXIT
+  trap 'screen_resized=1' WINCH
   printf '\033[?1049h'
   tput civis 2>/dev/null || true
   # VTIME gives the Esc continuation probe above a 100ms timeout; ordinary
@@ -1266,6 +1267,11 @@ render_screen() {
     force_redraw=1
     screen_prev_visible=()
     screen_prev_colored=()
+    # A resize can leave rows from the old (often taller) layout on screen —
+    # e.g. a footer drawn at a row position that is now mid-body or beyond the
+    # new terminal height. Nothing below redraws those leftover rows, so clear
+    # the whole screen before repainting at the new size.
+    printf '\033[2J'
   fi
 
   printf '\033[?2026h'
@@ -1423,6 +1429,10 @@ run_screen() {
   while true; do
     if ! handle_key; then
       break
+    fi
+    if [[ "${screen_resized:-0}" -eq 1 ]]; then
+      screen_resized=0
+      screen_needs_render=1
     fi
     if refresh_scan_progress && [[ "$show_help" -eq 0 ]]; then
       cols="$(terminal_cols)"
