@@ -33,8 +33,8 @@ tmux set-environment -g COLORFGBG "$COLORFGBG"
 # Catppuccin's reset also clears user overrides, so restore the dotfiles
 # presentation before rebuilding its generated window formats once more.
 tmux set-option -g @catppuccin_window_status_style "rounded"
-tmux set-option -g @catppuccin_window_text ' #{?#{m/r:^(bash|zsh|fish|sh)$,#{pane_current_command}},#{?#{==:#{pane_current_path},#{@dotfiles_home}},~,#{b:pane_current_path}},#{pane_current_command} · #{=/15/…:pane_title}}'
-tmux set-option -g @catppuccin_window_current_text ' #{?#{m/r:^(bash|zsh|fish|sh)$,#{pane_current_command}},#{?#{==:#{pane_current_path},#{@dotfiles_home}},~,#{b:pane_current_path}},#{pane_current_command} · #{=/15/…:pane_title}}'
+tmux set-option -g @catppuccin_window_text ' #{?automatic-rename,#{?#{m/r:^(bash|zsh|fish|sh)$,#{pane_current_command}},󰉋 #{?#{==:#{pane_current_path},#{@dotfiles_home}},~,#{b:pane_current_path}},#{pane_current_command} · #{=/15/…:pane_title}},#W}'
+tmux set-option -g @catppuccin_window_current_text ' #{?automatic-rename,#{?#{m/r:^(bash|zsh|fish|sh)$,#{pane_current_command}},󰉋 #{?#{==:#{pane_current_path},#{@dotfiles_home}},~,#{b:pane_current_path}},#{pane_current_command} · #{=/15/…:pane_title}},#W}'
 tmux set-option -g @catppuccin_date_time_text "%m-%d %H:%M"
 tmux set-option -g @catppuccin_status_background '#{@thm_bg}'
 tmux set-option -g @catppuccin_status_session_icon_fg '#{@thm_crust}'
