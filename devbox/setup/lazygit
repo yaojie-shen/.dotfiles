@@ -1,0 +1,294 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+ACTION="install"
+LAZYGIT_VERSION="${LAZYGIT_VERSION:-latest}"
+INSTALL_DIR="${LAZYGIT_INSTALL_DIR:-${HOME}/.local/bin}"
+INSTALL_DIR_SET="${LAZYGIT_INSTALL_DIR:+yes}"
+TMP_DIR=""
+
+DEVBOX_UTILS="${DEVBOX_UTILS:-${DEVBOX_ROOT:-${HOME}/.devbox}/libexec/devbox-utils}"
+if [[ ! -f "$DEVBOX_UTILS" ]]; then
+  echo "Error: devbox-utils not found at: $DEVBOX_UTILS" >&2
+  exit 1
+fi
+# shellcheck disable=SC1090
+source "$DEVBOX_UTILS"
+
+cleanup() {
+  [[ -z "$TMP_DIR" ]] || rm -rf "$TMP_DIR"
+}
+trap cleanup EXIT
+
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") [options]
+
+Install lazygit, a terminal UI for git.
+
+Behavior:
+  - macOS: manages lazygit exclusively through an existing Homebrew installation.
+  - Linux: downloads the official prebuilt binary and verifies its SHA-256 checksum.
+  - Leaves ~/.config/lazygit untouched on uninstall.
+
+Options:
+  -h, --help              Show this help message
+  -u, --uninstall         Uninstall lazygit using the platform's install method
+  --upgrade               Upgrade via Homebrew, or reinstall the Linux binary
+  --version <VERSION>     Linux only: specific release (default: latest)
+  --install-dir <DIR>     Linux only: install directory (default: $INSTALL_DIR)
+
+Examples:
+  devbox setup lazygit
+  devbox setup lazygit --upgrade
+  devbox setup lazygit --uninstall
+EOF
+}
+
+manage_homebrew() {
+  local brew_cmd brew_prefix existing_bin installed="no"
+
+  if [[ "$LAZYGIT_VERSION" != "latest" || -n "$INSTALL_DIR_SET" ]]; then
+    error "On macOS, Homebrew manages the version and install location. Remove LAZYGIT_VERSION/LAZYGIT_INSTALL_DIR overrides and Linux-only options."
+    return 1
+  fi
+
+  brew_cmd="$(command -v brew || true)"
+  if [[ -z "$brew_cmd" ]]; then
+    if [[ -x /opt/homebrew/bin/brew ]]; then
+      brew_cmd="/opt/homebrew/bin/brew"
+    elif [[ -x /usr/local/bin/brew ]]; then
+      brew_cmd="/usr/local/bin/brew"
+    else
+      error "Homebrew is required on macOS. Install Homebrew first, then rerun this command."
+      return 1
+    fi
+  fi
+
+  brew_prefix="$("$brew_cmd" --prefix)"
+  if "$brew_cmd" list --formula lazygit >/dev/null 2>&1; then
+    installed="yes"
+  fi
+
+  if [[ "$ACTION" == "uninstall" ]]; then
+    if [[ "$installed" == "yes" ]]; then
+      "$brew_cmd" uninstall --formula lazygit
+      success "lazygit uninstalled via Homebrew; configuration was left unchanged"
+    else
+      warning "lazygit is not installed via Homebrew"
+    fi
+    return 0
+  fi
+
+  # Do not silently add a second installation or delete an unmanaged binary.
+  for existing_bin in "$HOME/.local/bin/lazygit" "$(command -v lazygit || true)"; do
+    [[ -n "$existing_bin" ]] || continue
+    if [[ -e "$existing_bin" || -L "$existing_bin" ]]; then
+      if [[ "$installed" == "yes" && "$existing_bin" -ef "$brew_prefix/bin/lazygit" ]]; then
+        continue
+      fi
+      error "Existing lazygit outside this Homebrew installation: $existing_bin. Remove or migrate it before rerunning; no changes were made."
+      return 1
+    fi
+  done
+
+  if [[ "$installed" == "no" ]]; then
+    "$brew_cmd" install --formula lazygit
+  elif [[ "$ACTION" == "upgrade" ]]; then
+    "$brew_cmd" upgrade --formula lazygit
+  else
+    success "lazygit is already installed via Homebrew"
+    return 0
+  fi
+  success "lazygit managed via Homebrew: $brew_prefix/bin/lazygit"
+}
+
+require_value() {
+  local option="${1:-}"
+  local value="${2:-}"
+
+  if [[ -z "$value" || "$value" == -* ]]; then
+    error "Missing value for $option"
+    return 1
+  fi
+}
+
+release_platform() {
+  local os arch
+
+  case "$(uname -s)" in
+  Darwin) os="darwin" ;;
+  Linux) os="linux" ;;
+  *)
+    error "Unsupported OS: $(uname -s). lazygit provides binaries for macOS and Linux only."
+    return 1
+    ;;
+  esac
+
+  case "$(uname -m)" in
+  arm64 | aarch64) arch="arm64" ;;
+  x86_64 | amd64) arch="x86_64" ;;
+  *)
+    error "Unsupported architecture: $(uname -m). lazygit provides x86_64 and arm64 binaries only."
+    return 1
+    ;;
+  esac
+
+  printf '%s_%s\n' "$os" "$arch"
+}
+
+checksum() {
+  local file="$1"
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$file" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$file" | awk '{print $1}'
+  else
+    error "sha256sum or shasum is required to verify the lazygit download"
+    return 1
+  fi
+}
+
+check_requirements() {
+  local missing=()
+
+  command -v curl >/dev/null 2>&1 || missing+=("curl")
+  command -v tar >/dev/null 2>&1 || missing+=("tar")
+
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    error "Missing required commands: ${missing[*]}"
+    return 1
+  fi
+}
+
+resolve_version() {
+  if [[ "$LAZYGIT_VERSION" != "latest" ]]; then
+    printf '%s\n' "${LAZYGIT_VERSION#v}"
+    return 0
+  fi
+
+  local tag
+  tag="$(curl -fsSL --retry 3 --connect-timeout 10 --max-time 30 \
+    https://api.github.com/repos/jesseduffield/lazygit/releases/latest |
+    sed -n 's/.*"tag_name" *: *"v\{0,1\}\([^"]*\)".*/\1/p' | head -1)"
+
+  if [[ -z "$tag" ]]; then
+    error "Could not determine the latest lazygit version"
+    return 1
+  fi
+  printf '%s\n' "$tag"
+}
+
+install() {
+  local bin_path platform version archive archive_path checksums_path
+  local release_url expected actual extracted_bin
+
+  bin_path="${INSTALL_DIR%/}/lazygit"
+  if [[ -x "$bin_path" && "$ACTION" != "upgrade" ]]; then
+    success "lazygit is already installed: $bin_path ($("$bin_path" --version 2>/dev/null | head -1))"
+    return 0
+  fi
+
+  check_requirements
+  platform="$(release_platform)"
+  version="$(resolve_version)"
+  release_url="https://github.com/jesseduffield/lazygit/releases/download/v${version}"
+
+  archive="lazygit_${version}_${platform}.tar.gz"
+  TMP_DIR="$(mktemp -d)"
+  archive_path="$TMP_DIR/$archive"
+  checksums_path="$TMP_DIR/checksums.txt"
+
+  info "Downloading lazygit ${version} for ${platform}..."
+  if ! curl -fsSL --retry 3 --connect-timeout 10 --max-time 180 \
+    "$release_url/$archive" -o "$archive_path"; then
+    error "Failed to download $release_url/$archive"
+    return 1
+  fi
+  if ! curl -fsSL --retry 3 --connect-timeout 10 --max-time 30 \
+    "$release_url/checksums.txt" -o "$checksums_path"; then
+    error "Failed to download $release_url/checksums.txt"
+    return 1
+  fi
+
+  expected="$(awk -v name="$archive" '$2 == name || $2 == "*" name {print $1; exit}' "$checksums_path")"
+  actual="$(checksum "$archive_path")"
+  if [[ -z "$expected" ]]; then
+    error "No checksum published for $archive"
+    return 1
+  fi
+  if [[ "$actual" != "$expected" ]]; then
+    error "lazygit checksum verification failed"
+    return 1
+  fi
+
+  tar -xzf "$archive_path" -C "$TMP_DIR" lazygit
+  extracted_bin="$TMP_DIR/lazygit"
+  if [[ ! -f "$extracted_bin" ]]; then
+    error "lazygit binary was not found in the downloaded archive"
+    return 1
+  fi
+
+  mkdir -p "$INSTALL_DIR"
+  chmod +x "$extracted_bin"
+  mv -f "$extracted_bin" "$bin_path"
+  success "lazygit installed successfully: $bin_path"
+}
+
+uninstall() {
+  local bin_path="${INSTALL_DIR%/}/lazygit"
+
+  if [[ ! -f "$bin_path" ]]; then
+    warning "lazygit is not installed at $bin_path"
+    return 0
+  fi
+
+  rm -f "$bin_path"
+  success "lazygit uninstalled: $bin_path"
+  warning "lazygit configuration in ~/.config/lazygit was left unchanged"
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  -u | --uninstall)
+    ACTION="uninstall"
+    shift
+    ;;
+  --upgrade)
+    ACTION="upgrade"
+    shift
+    ;;
+  --version)
+    require_value "$1" "${2:-}"
+    LAZYGIT_VERSION="$2"
+    shift 2
+    ;;
+  --install-dir)
+    require_value "$1" "${2:-}"
+    INSTALL_DIR="$2"
+    INSTALL_DIR_SET="yes"
+    shift 2
+    ;;
+  *)
+    error "Unknown option: $1"
+    usage
+    exit 1
+    ;;
+  esac
+done
+
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  manage_homebrew
+  exit 0
+fi
+
+case "$ACTION" in
+uninstall) uninstall ;;
+*) install ;;
+esac
