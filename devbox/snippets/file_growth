@@ -493,7 +493,21 @@ update_sample_from_count() {
   delta=$((now_count - prev_count))
 
   raw="$(awk -v d="$delta" -v t="$dt" 'BEGIN { printf "%.4f", d / t }')"
-  smooth="$(awk -v a="$alpha" -v r="$raw" -v s="$smooth" 'BEGIN { printf "%.4f", a * r + (1 - a) * s }')"
+  if [[ "$delta" -eq 0 ]]; then
+    ((unchanged_samples += 1))
+    if [[ "$smooth_initialized" -eq 1 && "$unchanged_samples" -ge "$stale_sample_limit" ]]; then
+      smooth="0.0000"
+      smooth_initialized=0
+    fi
+  else
+    unchanged_samples=0
+  fi
+  if [[ "$smooth_initialized" -eq 0 && "$delta" -ne 0 ]]; then
+    smooth="$raw"
+    smooth_initialized=1
+  elif [[ "$smooth_initialized" -eq 1 ]]; then
+    smooth="$(awk -v a="$alpha" -v r="$raw" -v s="$smooth" 'BEGIN { printf "%.4f", a * r + (1 - a) * s }')"
+  fi
   smooth_min="$(awk -v s="$smooth" 'BEGIN { printf "%.2f", s * 60 }')"
   sample_line="$(format_sample "$scan_s" "$now_count" "$delta" "$raw" "$smooth" "$smooth_min")"
 
@@ -1499,6 +1513,10 @@ else
   mode="file-lines"
 fi
 
+# Treat a rate as stale after roughly three EMA time constants without change.
+# With the default alpha=0.30 this is 10 consecutive unchanged samples.
+stale_sample_limit="$(awk -v a="$alpha" 'BEGIN { printf "%d", int(3 / a + 0.999999) }')"
+
 case "$ui" in
   append)
     initial_scan_start="$(date +%s)"
@@ -1507,6 +1525,8 @@ case "$ui" in
     prev_time="$(date +%s)"
     initial_scan_s=$((prev_time - initial_scan_start))
     smooth="0"
+    smooth_initialized=0
+    unchanged_samples=0
     printed=0
     sample_line=""
     run_append
@@ -1517,6 +1537,8 @@ case "$ui" in
     prev_time="$(date +%s)"
     initial_scan_s=0
     smooth="0"
+    smooth_initialized=0
+    unchanged_samples=0
     printed=0
     sample_line=""
     saved_stty=""
