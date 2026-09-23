@@ -1,5 +1,11 @@
 # Fish counterpart of shell/common/00_exports.sh; keep the two in sync.
 
+# bash/zsh get ~/.local/bin from ~/.profile, which fish never reads; starship and
+# the agent CLIs install there.
+if test -d "$HOME/.local/bin"; and not contains -- "$HOME/.local/bin" $PATH
+    set -gx PATH "$HOME/.local/bin" $PATH
+end
+
 # Ask hydra to always show full error message including stack trace
 set -gx HYDRA_FULL_ERROR 1
 

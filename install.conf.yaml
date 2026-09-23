@@ -43,7 +43,9 @@
         if command -v starship >/dev/null 2>&1; then
           printf 'Starship already installed at %s, skipping.\n' "$(command -v starship)"
         else
-          curl -sS https://starship.rs/install.sh | sh -s -- --yes --bin-dir "$HOME/.local/bin"
+          # The installer refuses a --bin-dir that does not exist yet (fresh machines).
+          mkdir -p "$HOME/.local/bin" &&
+            curl -sS https://starship.rs/install.sh | sh -s -- --yes --bin-dir "$HOME/.local/bin"
         fi
       description: ">>> Starship"
       quiet: true
@@ -126,11 +128,9 @@
     # without it installed is harmless.
     ~/.config/fish/config.fish:
       path: config.fish
-      backup: true
       force: true
     ~/.config/fish/fish_plugins:
       path: fish_plugins
-      backup: true
       force: true
     ~/.config/starship.toml: starship.toml
     ~/.local/share/fish/fish_history: # Keep fish history in persistent folder, like ~/.zsh_history
