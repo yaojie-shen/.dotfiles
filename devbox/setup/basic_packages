@@ -21,7 +21,7 @@ case "$pkg_manager" in
     sudo apt-get update
 
     packages=(
-      zsh rsync tmux aria2 nano git-lfs iputils-ping
+      zsh fish rsync tmux aria2 nano git-lfs iputils-ping
       # System monitoring
       nvtop htop speedometer atop
       # Required by some LSP server for neovim

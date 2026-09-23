@@ -63,6 +63,12 @@ devbox snippets --list
 
 Neovim is configured under `nvim/` and is linked to `~/.config/nvim` by the installer.
 
+### Fish
+
+Install `fish` with `devbox setup basic_packages` (apt) or `brew install fish`. The installer installs [starship](https://starship.rs) into `~/.local/bin`, links `config.fish` and `fish_plugins` into `~/.config/fish/` and `starship.toml` (catppuccin-powerline preset) into `~/.config/`, keeps fish history in `persistent/.fish_history`, and, when fish is available, runs `fisher update` (plugins: bass, nvm.fish). Starship glyphs need a Nerd Font such as JetBrainsMono Nerd Font in the terminal.
+
+`config.fish` sources `shell/source.fish`, which loads `shell/fish/*.fish` in `NN_` order, mirroring `shell/zsh/*.zshrc` and `shell/common/*.sh`: devbox (with fish completions), aliases, exports, and native fish ports of `shell/common/00_functions.sh`. Machine-local fish overrides go in `~/.persistent/custom.fish` or `~/.persistent/custom/shell/*.fish`.
+
 ## Customization
 
 Machine-specific or private configuration should live under `persistent/` or `persistent/custom/` instead of being committed directly to shared dotfiles. The default shell entrypoints source shared files from `~/.shell`, while local tool-specific additions can remain in the generated shell startup files.

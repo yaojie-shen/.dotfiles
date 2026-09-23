@@ -39,6 +39,14 @@
         fi
       description: ">>> Bash-it"
       quiet: true
+    - command: |
+        if command -v starship >/dev/null 2>&1; then
+          printf 'Starship already installed at %s, skipping.\n' "$(command -v starship)"
+        else
+          curl -sS https://starship.rs/install.sh | sh -s -- --yes --bin-dir "$HOME/.local/bin"
+        fi
+      description: ">>> Starship"
+      quiet: true
 
 - clean: [ '~' ]
 
@@ -114,3 +122,29 @@
       path: persistent/autojump
       if: '[ "$(uname -s)" = "Linux" ]'
     ~/.config/nvim: nvim
+    # Fish itself comes from `devbox setup basic_packages` (apt) or Homebrew; linking
+    # without it installed is harmless.
+    ~/.config/fish/config.fish:
+      path: config.fish
+      backup: true
+      force: true
+    ~/.config/fish/fish_plugins:
+      path: fish_plugins
+      backup: true
+      force: true
+    ~/.config/starship.toml: starship.toml
+    ~/.local/share/fish/fish_history: # Keep fish history in persistent folder, like ~/.zsh_history
+      path: persistent/.fish_history
+      if: 'touch persistent/.fish_history; [ ! -e "$HOME/.local/share/fish/fish_history" ] || [ -L "$HOME/.local/share/fish/fish_history" ]'
+
+# Needs the fish links above in place.
+- shell:
+    - command: |
+        command -v fish >/dev/null 2>&1 || exit 0
+        if fish -c 'functions -q fisher' >/dev/null 2>&1; then
+          fish -c 'fisher update'
+        else
+          fish -c 'curl -sL https://raw.githubusercontent.com/jorgebucaran/fisher/main/functions/fisher.fish | source; and fisher update'
+        fi
+      description: ">>> Fisher plugins (fish only)"
+      quiet: true
