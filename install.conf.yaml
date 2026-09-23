@@ -39,6 +39,16 @@
         fi
       description: ">>> Bash-it"
       quiet: true
+    - command: |
+        if command -v starship >/dev/null 2>&1; then
+          printf 'Starship already installed at %s, skipping.\n' "$(command -v starship)"
+        else
+          # The installer refuses a --bin-dir that does not exist yet (fresh machines).
+          mkdir -p "$HOME/.local/bin" &&
+            curl -sS https://starship.rs/install.sh | sh -s -- --yes --bin-dir "$HOME/.local/bin"
+        fi
+      description: ">>> Starship"
+      quiet: true
 
 - clean: [ '~' ]
 
@@ -114,3 +124,12 @@
       path: persistent/autojump
       if: '[ "$(uname -s)" = "Linux" ]'
     ~/.config/nvim: nvim
+    # Fish itself comes from `devbox setup basic_packages` (apt) or Homebrew; linking
+    # without it installed is harmless.
+    ~/.config/fish/config.fish:
+      path: config.fish
+      force: true
+    ~/.config/starship.toml: starship.toml
+    ~/.local/share/fish/fish_history: # Keep fish history in persistent folder, like ~/.zsh_history
+      path: persistent/.fish_history
+      if: 'touch persistent/.fish_history; [ ! -e "$HOME/.local/share/fish/fish_history" ] || [ -L "$HOME/.local/share/fish/fish_history" ]'
