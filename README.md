@@ -55,6 +55,14 @@ devbox setup neovim
 devbox setup pyenv
 ```
 
+To install only `devbox`, without the rest of the dotfiles, run `devbox/install.sh` from a checkout, or:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Yaojie-Shen/.dotfiles/main/devbox/install.sh | bash
+```
+
+It clones the repository to `~/.dotfiles` if missing, links `~/.devbox` to its `devbox/` like `./install` does, and adds `devbox init` for bash, zsh and fish: a managed block in `~/.bashrc` and `~/.zshrc`, and `~/.config/fish/conf.d/devbox.fish`. Shells that already load devbox through the dotfiles `~/.shell` setup are skipped. Pass `--uninstall` to undo.
+
 Use snippets for reusable command-line workflows:
 
 ```bash
