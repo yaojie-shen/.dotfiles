@@ -20,9 +20,29 @@ set -gx CONDA_PKGS_DIRS "$HOME/.persistent/cache/conda"
 # Set skills-manager home dir to persistent folder
 set -gx SKILLS_HOME "$HOME/.persistent/skills"
 
-# nvm.fish installs node under ~/.local/share/nvm; expose the newest installed
-# version so node/npm also work in non-interactive shells before `nvm use` runs.
-set -l __node_bins $HOME/.local/share/nvm/v*/bin
-if test (count $__node_bins) -gt 0
-    set -gx PATH $__node_bins[-1] $PATH
+# Node from nvm (`devbox setup nvm`, ~/.nvm), shared with bash/zsh. Put the
+# default version on PATH without sourcing nvm.sh at startup (slow). `nvm` runs
+# the bash nvm, then copies its PATH back, so `nvm use` / `nvm install` switch the
+# node on this shell's PATH too.
+set -q NVM_DIR; or set -gx NVM_DIR "$HOME/.nvm"
+if test -s "$NVM_DIR/nvm.sh"
+    function nvm
+        set -l path_file (mktemp)
+        bash -c 'source "$NVM_DIR/nvm.sh" --no-use && nvm "$@" && printf %s "$PATH" >"$0"' $path_file $argv
+        set -l nvm_status $status
+        if test $nvm_status -eq 0; and test -s $path_file
+            set -gx PATH (string split : -- (cat $path_file))
+        end
+        rm -f $path_file
+        return $nvm_status
+    end
+
+    # ponytail: alias/default must name a version (e.g. 22); lts/* or chained
+    # aliases fall back to the newest installed node.
+    set -l __default (string trim -l -c v -- (cat "$NVM_DIR/alias/default" 2>/dev/null))
+    set -l __node_bins $NVM_DIR/versions/node/v$__default*/bin
+    test (count $__node_bins) -gt 0; or set __node_bins $NVM_DIR/versions/node/v*/bin
+    if test (count $__node_bins) -gt 0
+        set -gx PATH $__node_bins[-1] $PATH
+    end
 end

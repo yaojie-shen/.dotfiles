@@ -56,6 +56,10 @@ banner() {
   echo -en "\033[0m"
 }
 
+# Dotbot runs shell steps with $SHELL. The configs are written for bash, and under
+# a fish login shell those steps silently do nothing, so pin bash for both runs.
+export SHELL="${BASH}"
+
 banner "DOTBOT: BASE CONFIG" "${CONFIG}"
 (set +e && "${BASEDIR}/${DOTBOT_DIR}/${DOTBOT_BIN}" -d "${BASEDIR}" -c "${CONFIG}" "${@}" || true)
 

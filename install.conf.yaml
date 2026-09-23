@@ -129,22 +129,7 @@
     ~/.config/fish/config.fish:
       path: config.fish
       force: true
-    ~/.config/fish/fish_plugins:
-      path: fish_plugins
-      force: true
     ~/.config/starship.toml: starship.toml
     ~/.local/share/fish/fish_history: # Keep fish history in persistent folder, like ~/.zsh_history
       path: persistent/.fish_history
       if: 'touch persistent/.fish_history; [ ! -e "$HOME/.local/share/fish/fish_history" ] || [ -L "$HOME/.local/share/fish/fish_history" ]'
-
-# Needs the fish links above in place.
-- shell:
-    - command: |
-        command -v fish >/dev/null 2>&1 || exit 0
-        if fish -c 'functions -q fisher' >/dev/null 2>&1; then
-          fish -c 'fisher update'
-        else
-          fish -c 'curl -sL https://raw.githubusercontent.com/jorgebucaran/fisher/main/functions/fisher.fish | source; and fisher update'
-        fi
-      description: ">>> Fisher plugins (fish only)"
-      quiet: true
