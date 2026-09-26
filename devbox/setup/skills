@@ -2,8 +2,27 @@
 
 set -Eeuo pipefail
 
-INSTALLER_URL="${SKILLS_INSTALLER_URL:-https://raw.githubusercontent.com/yaojie-shen/Skills-Manager-TUI/main/install.sh}"
+DEFAULT_INSTALLER_COMMIT="a00cbf51d0d9a43419f18a30d55daa93eac3ad3a"
+DEFAULT_INSTALLER_URL="https://raw.githubusercontent.com/yaojie-shen/Skills-Manager-TUI/${DEFAULT_INSTALLER_COMMIT}/install.sh"
+DEFAULT_INSTALLER_SHA256="43f01ba45a9253fad425a0712f170e45dc10f81483cc691ded782d9e98b40b1b"
+DEFAULT_REPO="yaojie-shen/Skills-Manager-TUI"
+
+ACTION="install"
+ACTION_SET=0
 FORCE_INSTALL=0
+ASSUME_YES=0
+INITIALIZE_LIBRARY=1
+VERSION="${SKILLS_VERSION:-latest}"
+VERSION_SET="${SKILLS_VERSION:+yes}"
+TARGET="${SKILLS_TARGET:-}"
+TARGET_SET="${SKILLS_TARGET:+yes}"
+INSTALL_DIR="${SKILLS_INSTALL_DIR:-${HOME}/.local/bin}"
+REPO="${SKILLS_REPO:-$DEFAULT_REPO}"
+REPO_SET="${SKILLS_REPO:+yes}"
+SKILLS_HOME_DIR="${SKILLS_HOME:-${HOME}/.skills}"
+NO_PATH_UPDATE="${SKILLS_NO_PATH_UPDATE:-0}"
+INSTALLER_URL="${SKILLS_INSTALLER_URL:-$DEFAULT_INSTALLER_URL}"
+INSTALLER_SHA256="${SKILLS_INSTALLER_SHA256:-}"
 
 DEVBOX_UTILS="${DEVBOX_UTILS:-${DEVBOX_ROOT:-${HOME}/.devbox}/libexec/devbox-utils}"
 if [[ ! -f "$DEVBOX_UTILS" ]]; then
@@ -17,52 +36,554 @@ usage() {
   cat <<EOF
 Usage: $(basename "$0") [options]
 
-Install Skills Manager TUI using its official installer.
+Install or upgrade Skills Manager TUI and safely initialize a new Skills Library.
+Existing Library contents, remotes, deployments, and agent links are never managed.
 
-Options:
-  -f, --force    Run the installer even when skills is already available
-  -h, --help     Show this help message
+Actions:
+  --upgrade                   Install the selected/latest release even when already installed
+  --init                      Initialize the Skills Library only
+  --status                    Show binary, PATH, and Library state (read-only)
+  --doctor                    Validate installation prerequisites and state (read-only)
+
+Install options:
+  -f, --force                 Reinstall the expected binary
+  --version <VERSION>         Install a specific release (default: latest)
+  --target <TRIPLE>           Override the release target triple
+  --install-dir <DIR>         Binary directory (default: ~/.local/bin)
+  --repo <OWNER/REPO>         Release repository (default: $DEFAULT_REPO)
+  --no-path-update            Do not let the upstream installer update shell profiles
+
+Library options:
+  --skills-home <DIR>         Library root (default: \$SKILLS_HOME or ~/.skills)
+  --no-init                   Install/upgrade without initializing a new Library
+
+Installer options:
+  --installer-url <URL>       Override the pinned installer URL
+  --installer-sha256 <HEX>    SHA-256 required with a custom installer URL
+
+General:
+  -y, --yes                   Assume yes when initializing a new Library (CI/non-interactive use)
+  -h, --help                  Show this help message
 
 Environment:
-  SKILLS_INSTALLER_URL    Override the installer URL
+  SKILLS_VERSION, SKILLS_TARGET, SKILLS_INSTALL_DIR, SKILLS_REPO
+  SKILLS_NO_PATH_UPDATE, SKILLS_HOME
+  SKILLS_INSTALLER_URL, SKILLS_INSTALLER_SHA256
 
 Examples:
-  $(basename "$0")
-  $(basename "$0") --force
+  devbox setup skills
+  devbox setup skills --upgrade
+  devbox setup skills --version v0.1.1
+  devbox setup skills --status
+  devbox setup skills --doctor
 EOF
 }
 
-check_requirements() {
-  local missing=()
+require_value() {
+  local option="${1:-}"
+  local value="${2:-}"
 
-  command -v curl >/dev/null 2>&1 || missing+=(curl)
-  command -v mktemp >/dev/null 2>&1 || missing+=(mktemp)
-  command -v sh >/dev/null 2>&1 || missing+=(sh)
-
-  if [[ "${#missing[@]}" -gt 0 ]]; then
-    error "Missing required command(s): ${missing[*]}"
-    exit 1
+  if [[ -z "$value" || "$value" == -* ]]; then
+    error "Missing value for $option"
+    return 1
   fi
 }
 
-install_skills() (
-  local tmp_dir installer
+confirm() {
+  local prompt="$1"
+  local answer
+
+  if [[ "$ASSUME_YES" -eq 1 ]]; then
+    return 0
+  fi
+  if [[ ! -t 0 ]]; then
+    error "$prompt"
+    error "Confirmation requires an interactive terminal; rerun with -y or --yes"
+    return 1
+  fi
+
+  printf '%s [y/N]: ' "$prompt" >&2
+  read -r answer || answer=""
+  case "$answer" in
+  y | Y | yes | YES | Yes) return 0 ;;
+  *)
+    warning "Cancelled"
+    return 1
+    ;;
+  esac
+}
+
+set_action() {
+  local action="$1"
+
+  if [[ "$ACTION_SET" -eq 1 && "$ACTION" != "$action" ]]; then
+    error "Actions are mutually exclusive: --$ACTION and --$action"
+    return 1
+  fi
+  ACTION="$action"
+  ACTION_SET=1
+}
+
+skills_bin_path() {
+  printf '%s\n' "${INSTALL_DIR%/}/skills"
+}
+
+command_path() {
+  command -v skills 2>/dev/null || true
+}
+
+same_file() {
+  local first="$1"
+  local second="$2"
+
+  [[ -e "$first" && -e "$second" && "$first" -ef "$second" ]]
+}
+
+binary_version() {
+  local path="$1"
+  local output version
+
+  [[ -f "$path" && -x "$path" ]] || return 1
+  output="$("$path" --version 2>/dev/null)" || return 1
+  case "$output" in
+  skills\ *) ;;
+  *) return 1 ;;
+  esac
+  version="${output#skills }"
+  version="${version%%[[:space:]]*}"
+  [[ -n "$version" ]] || return 1
+  printf '%s\n' "${version#v}"
+}
+
+classify_command_path() {
+  local expected actual
+  expected="$(skills_bin_path)"
+  actual="$(command_path)"
+
+  if binary_version "$expected" >/dev/null 2>&1; then
+    if [[ -z "$actual" ]]; then
+      printf 'not-on-path\n'
+    elif same_file "$expected" "$actual"; then
+      printf 'managed\n'
+    else
+      printf 'shadowed\n'
+    fi
+  elif [[ -n "$actual" ]]; then
+    printf 'external-only\n'
+  else
+    printf 'missing\n'
+  fi
+}
+
+classify_library() {
+  local root="$SKILLS_HOME_DIR"
+  local metadata="$root/.skills-meta"
+  local config="$metadata/config.toml"
+
+  if [[ -L "$root" && ! -e "$root" ]]; then
+    printf 'invalid\n'
+    return
+  fi
+  if [[ ! -e "$root" ]]; then
+    printf 'missing\n'
+    return
+  fi
+  if [[ ! -d "$root" ]]; then
+    printf 'invalid\n'
+    return
+  fi
+  if [[ -e "$metadata" && ! -d "$metadata" ]]; then
+    printf 'invalid\n'
+    return
+  fi
+  if [[ -e "$config" || -L "$config" ]]; then
+    if [[ -f "$config" && ! -L "$config" ]]; then
+      printf 'initialized\n'
+    else
+      printf 'invalid\n'
+    fi
+    return
+  fi
+  if [[ -n "$(find "$root" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
+    printf 'unknown-nonempty\n'
+  else
+    printf 'empty\n'
+  fi
+}
+
+check_supported_platform() {
+  local os arch
+  os="$(uname -s)"
+  arch="$(uname -m)"
+
+  if [[ -n "$TARGET" ]]; then
+    return 0
+  fi
+
+  case "$os" in
+  Darwin | Linux) ;;
+  *)
+    error "Unsupported OS: $os. Supply --target only if upstream publishes a compatible binary."
+    return 1
+    ;;
+  esac
+
+  case "$arch" in
+  x86_64 | amd64 | arm64 | aarch64) ;;
+  *)
+    error "Unsupported architecture: $arch. Supply --target only if upstream publishes a compatible binary."
+    return 1
+    ;;
+  esac
+}
+
+check_installer_requirements() {
+  local missing=()
+
+  command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 || missing+=(curl-or-wget)
+  command -v mktemp >/dev/null 2>&1 || missing+=(mktemp)
+  command -v sh >/dev/null 2>&1 || missing+=(sh)
+  command -v tar >/dev/null 2>&1 || missing+=(tar)
+  command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 || missing+=(sha256sum-or-shasum)
+
+  if [[ "${#missing[@]}" -gt 0 ]]; then
+    error "Missing required command(s): ${missing[*]}"
+    return 1
+  fi
+}
+
+sha256_file() {
+  local file="$1"
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$file" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$file" | awk '{print $1}'
+  else
+    error "sha256sum or shasum is required to verify the installer"
+    return 1
+  fi
+}
+
+download_file() {
+  local url="$1"
+  local output="$2"
+
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL --retry 3 --connect-timeout 10 --max-time 60 "$url" -o "$output"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q --timeout=60 --tries=3 -O "$output" "$url"
+  else
+    error "curl or wget is required to download the installer"
+    return 1
+  fi
+}
+
+run_installer() (
+  local tmp_dir installer actual expected_checksum
+  local -a args
+
+  if [[ "$INSTALLER_URL" == "$DEFAULT_INSTALLER_URL" ]]; then
+    expected_checksum="${INSTALLER_SHA256:-$DEFAULT_INSTALLER_SHA256}"
+  elif [[ -z "$INSTALLER_SHA256" ]]; then
+    error "A custom installer URL requires --installer-sha256 or SKILLS_INSTALLER_SHA256"
+    return 1
+  else
+    expected_checksum="$INSTALLER_SHA256"
+  fi
+  if [[ ! "$expected_checksum" =~ ^[[:xdigit:]]{64}$ ]]; then
+    error "Installer SHA-256 must be exactly 64 hexadecimal characters"
+    return 1
+  fi
+  expected_checksum="$(printf '%s' "$expected_checksum" | tr '[:upper:]' '[:lower:]')"
 
   tmp_dir="$(mktemp -d)"
-  installer="${tmp_dir}/install.sh"
+  installer="$tmp_dir/install.sh"
   trap 'rm -rf "$tmp_dir"' EXIT
 
-  info "Downloading the Skills Manager TUI installer..."
-  curl -fsSL "$INSTALLER_URL" -o "$installer"
+  info "Downloading the pinned Skills Manager installer..."
+  download_file "$INSTALLER_URL" "$installer"
+  actual="$(sha256_file "$installer")"
+  actual="$(printf '%s' "$actual" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$actual" != "$expected_checksum" ]]; then
+    error "Skills Manager installer checksum verification failed"
+    return 1
+  fi
+
+  args=(--install-dir "$INSTALL_DIR")
+  if [[ "$VERSION" != "latest" ]]; then
+    args+=(--version "$VERSION")
+  fi
+  if [[ -n "$TARGET" ]]; then
+    args+=(--target "$TARGET")
+  fi
 
   info "Installing Skills Manager TUI..."
-  sh "$installer"
+  SKILLS_REPO="$REPO" SKILLS_NO_PATH_UPDATE="$NO_PATH_UPDATE" sh "$installer" "${args[@]}"
 )
+
+verify_expected_binary() {
+  local expected version
+  expected="$(skills_bin_path)"
+
+  if [[ ! -f "$expected" || ! -x "$expected" ]]; then
+    error "Expected Skills Manager executable was not installed: $expected"
+    return 1
+  fi
+  if ! version="$(binary_version "$expected")"; then
+    error "Executable at $expected is not a recognized Skills Manager binary"
+    return 1
+  fi
+  success "Skills Manager binary verified: $expected (skills $version)"
+}
+
+verify_current_path() {
+  local expected actual state
+  expected="$(skills_bin_path)"
+  actual="$(command_path)"
+  state="$(classify_command_path)"
+
+  case "$state" in
+  managed) return 0 ;;
+  not-on-path)
+    error "Skills Manager is installed at $expected, but skills is not available in the current PATH"
+    warning "Open a new shell or add ${INSTALL_DIR%/} to PATH, then run: devbox setup skills --doctor"
+    ;;
+  shadowed)
+    error "Skills Manager at $expected is shadowed by another command: $actual"
+    warning "Fix PATH order, then run: devbox setup skills --doctor"
+    ;;
+  *)
+    error "Skills Manager PATH state is unhealthy: $state"
+    ;;
+  esac
+  return 1
+}
+
+initialize_library() {
+  local expected state
+  expected="$(skills_bin_path)"
+  state="$(classify_library)"
+
+  case "$state" in
+  initialized)
+    success "Skills Library is already initialized: $SKILLS_HOME_DIR"
+    return 0
+    ;;
+  missing) ;;
+  empty) ;;
+  unknown-nonempty)
+    error "Refusing to initialize non-empty directory without Skills metadata: $SKILLS_HOME_DIR"
+    return 1
+    ;;
+  invalid)
+    error "Invalid Skills Library path or metadata layout: $SKILLS_HOME_DIR"
+    return 1
+    ;;
+  esac
+
+  confirm "Initialize a new Skills Library at $SKILLS_HOME_DIR?"
+  [[ "$state" != "missing" ]] || mkdir -p "$SKILLS_HOME_DIR"
+  info "Initializing Skills Library: $SKILLS_HOME_DIR"
+  "$expected" --root "$SKILLS_HOME_DIR" init
+  if [[ "$(classify_library)" != "initialized" ]]; then
+    error "Skills Library initialization did not create .skills-meta/config.toml"
+    return 1
+  fi
+  success "Skills Library initialized: $SKILLS_HOME_DIR"
+}
+
+status() {
+  local expected actual expected_version="unavailable" actual_version="unavailable"
+  local path_state library_state path_update
+  expected="$(skills_bin_path)"
+  actual="$(command_path)"
+  path_state="$(classify_command_path)"
+  library_state="$(classify_library)"
+  path_update="enabled"
+  [[ "$NO_PATH_UPDATE" == "1" ]] && path_update="disabled"
+
+  expected_version="$(binary_version "$expected" 2>/dev/null || printf 'unavailable')"
+  if [[ -n "$actual" ]]; then
+    actual_version="$(binary_version "$actual" 2>/dev/null || printf 'unrecognized')"
+  fi
+
+  cat <<EOF
+Skills Manager status
+  expected command: $expected
+  expected version: $expected_version
+  command on PATH: ${actual:-not found}
+  PATH version: $actual_version
+  PATH state: $path_state
+  install directory: $INSTALL_DIR
+  selected version: $VERSION
+  target override: ${TARGET:-none}
+  release repository: $REPO
+  installer PATH update: $path_update
+  Skills home: $SKILLS_HOME_DIR
+  Library state: $library_state
+  Library config: $SKILLS_HOME_DIR/.skills-meta/config.toml
+EOF
+}
+
+doctor() {
+  local failed=0 state
+
+  status
+  printf '\nDiagnostics\n'
+
+  if check_supported_platform; then
+    success "Platform is supported"
+  else
+    failed=1
+  fi
+  if check_installer_requirements; then
+    success "Installer prerequisites are available"
+  else
+    failed=1
+  fi
+  if verify_expected_binary; then
+    :
+  else
+    failed=1
+  fi
+  if verify_current_path; then
+    success "PATH resolves to the managed Skills Manager binary"
+  else
+    failed=1
+  fi
+
+  state="$(classify_library)"
+  case "$state" in
+  missing | empty | initialized)
+    success "Skills Library state is safe: $state"
+    ;;
+  *)
+    error "Skills Library state requires manual review: $state"
+    failed=1
+    ;;
+  esac
+
+  return "$failed"
+}
+
+install_or_upgrade() {
+  local expected current requested state should_install=0
+  expected="$(skills_bin_path)"
+  state="$(classify_command_path)"
+
+  if [[ -e "$expected" || -L "$expected" ]]; then
+    if [[ ! -f "$expected" || ! -x "$expected" ]]; then
+      error "Refusing to overwrite non-executable or non-file path: $expected"
+      return 1
+    fi
+    if ! current="$(binary_version "$expected")"; then
+      if [[ "$FORCE_INSTALL" -ne 1 ]]; then
+        error "Refusing to overwrite unrecognized executable: $expected (use --force only after reviewing it)"
+        return 1
+      fi
+      warning "Overwriting the reviewed executable because --force was supplied: $expected"
+      should_install=1
+    fi
+  fi
+
+  if [[ "$state" == "external-only" && "$FORCE_INSTALL" -ne 1 ]]; then
+    error "An external skills command is on PATH, but the managed binary is absent: $(command_path)"
+    warning "Use its directory with --install-dir, or use --force only if parallel installs are intentional"
+    return 1
+  fi
+
+  if [[ "$ACTION" == "upgrade" || "$FORCE_INSTALL" -eq 1 || -n "$TARGET_SET" || -n "$REPO_SET" ]]; then
+    should_install=1
+  elif ! current="$(binary_version "$expected" 2>/dev/null)"; then
+    should_install=1
+  elif [[ -n "$VERSION_SET" ]]; then
+    if [[ "$VERSION" == "latest" ]]; then
+      should_install=1
+    else
+      requested="${VERSION#v}"
+      [[ "$current" == "$requested" ]] || should_install=1
+    fi
+  fi
+
+  if [[ "$should_install" -eq 1 ]]; then
+    check_supported_platform
+    check_installer_requirements
+    run_installer
+  else
+    success "Skills Manager TUI is already installed: $expected (skills $current)"
+  fi
+
+  verify_expected_binary
+  verify_current_path
+  if [[ "$INITIALIZE_LIBRARY" -eq 1 ]]; then
+    initialize_library
+  fi
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+  --upgrade)
+    set_action upgrade
+    ;;
+  --init)
+    set_action init
+    ;;
+  --status)
+    set_action status
+    ;;
+  --doctor)
+    set_action doctor
+    ;;
   -f | --force)
     FORCE_INSTALL=1
+    ;;
+  -y | --yes)
+    ASSUME_YES=1
+    ;;
+  --version)
+    require_value "$1" "${2:-}"
+    VERSION="$2"
+    VERSION_SET=yes
+    shift
+    ;;
+  --target)
+    require_value "$1" "${2:-}"
+    TARGET="$2"
+    TARGET_SET=yes
+    shift
+    ;;
+  --install-dir)
+    require_value "$1" "${2:-}"
+    INSTALL_DIR="$2"
+    shift
+    ;;
+  --repo)
+    require_value "$1" "${2:-}"
+    REPO="$2"
+    REPO_SET=yes
+    shift
+    ;;
+  --skills-home)
+    require_value "$1" "${2:-}"
+    SKILLS_HOME_DIR="$2"
+    shift
+    ;;
+  --no-path-update)
+    NO_PATH_UPDATE=1
+    ;;
+  --no-init)
+    INITIALIZE_LIBRARY=0
+    ;;
+  --installer-url)
+    require_value "$1" "${2:-}"
+    INSTALLER_URL="$2"
+    shift
+    ;;
+  --installer-sha256)
+    require_value "$1" "${2:-}"
+    INSTALLER_SHA256="$2"
+    shift
     ;;
   -h | --help)
     usage
@@ -77,17 +598,30 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-if [[ "$FORCE_INSTALL" -eq 0 ]] && command -v skills >/dev/null 2>&1; then
-  success "Skills Manager TUI is already installed: $(command -v skills)"
-  exit 0
+if [[ -z "$INSTALL_DIR" || -z "$REPO" || -z "$SKILLS_HOME_DIR" ]]; then
+  error "Install directory, repository, and Skills home must not be empty"
+  exit 1
 fi
-
-check_requirements
-install_skills
-
-if command -v skills >/dev/null 2>&1; then
-  success "Skills Manager TUI installed successfully: $(command -v skills)"
-else
-  warning "Installer finished, but skills is not available in the current PATH"
-  warning "Start a new shell, then run: skills"
+if [[ "$ACTION" == "init" && "$INITIALIZE_LIBRARY" -eq 0 ]]; then
+  error "--init and --no-init cannot be used together"
+  exit 1
 fi
+if [[ "$FORCE_INSTALL" -eq 1 && "$ACTION" != "install" && "$ACTION" != "upgrade" ]]; then
+  error "--force is only valid for install or --upgrade"
+  exit 1
+fi
+case "$ACTION" in
+install | upgrade)
+  install_or_upgrade
+  ;;
+init)
+  verify_expected_binary
+  initialize_library
+  ;;
+status)
+  status
+  ;;
+doctor)
+  doctor
+  ;;
+esac

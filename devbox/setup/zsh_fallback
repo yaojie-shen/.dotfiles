@@ -39,16 +39,11 @@ EOF
 configure_zsh_fallback_rc() {
   local content
 
-  content='# Only switch to zsh from an interactive shell.
-case $- in
-*i*)
-    if command -v zsh >/dev/null 2>&1; then
-        if zsh; then
-            exit 0
-        fi
-    fi
-    ;;
-esac'
+  content='# Only switch to zsh from an interactive shell without a command string.
+if [[ $- == *i* && -z "${BASH_EXECUTION_STRING:-}" ]] &&
+    command -v zsh >/dev/null 2>&1; then
+    exec zsh
+fi'
 
   configure_rc_block "$RC_FILE" "$START_MARKER" "$END_MARKER" "$content"
 }

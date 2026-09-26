@@ -40,8 +40,6 @@ zplug "zsh-users/zsh-autosuggestions", as:plugin, defer:2
 
 zplug "zdharma/fast-syntax-highlighting", as:plugin, defer:2
 
-zplug "conda-incubator/conda-zsh-completion", as:plugin, defer:2
-
 ################
 # Color themes #
 ################
