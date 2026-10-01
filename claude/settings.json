@@ -6,6 +6,10 @@
     "refreshInterval": 60
   },
   "includeCoAuthoredBy": false,
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
   "permissions": {
     "allow": [
       "Bash(git status)",
