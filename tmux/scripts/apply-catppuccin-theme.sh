@@ -51,6 +51,8 @@ done
 tmux_command+=(\; set-environment -g COLORFGBG "$COLORFGBG"
   \; source-file "$OPTIONS"
   \; source-file "$THEME"
+  \; set-option -gF message-style 'fg=#{@thm_mauve},bg=#{@thm_mantle},fill=#{@thm_mantle},bold,align=left'
+  \; set-option -gF message-command-style 'fg=#{@thm_mauve},bg=#{@thm_mantle},fill=#{@thm_mantle},bold,align=left'
   \; set-option -g window-status-separator ''
   \; set-option -g window-status-activity-style default
   \; set-option -g window-status-bell-style default)
