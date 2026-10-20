@@ -1,6 +1,6 @@
 # Minimal Pure-style Powerlevel10k configuration, managed by dotfiles.
 # Reference: https://github.com/romkatv/powerlevel10k/blob/master/config/p10k-pure.zsh
-# Loaded before zplug load. No per-machine configuration wizard is needed.
+# Loaded after the mise-provisioned theme. No per-machine configuration wizard is needed.
 typeset -g POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD=true
 typeset -g POWERLEVEL9K_INSTANT_PROMPT=verbose
 typeset -g POWERLEVEL9K_TRANSIENT_PROMPT=off

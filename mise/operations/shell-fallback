@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# A local preference belongs in the normal mise user config, never in tracked rc.
+if [[ $# != 1 || "$1" == --help ]]; then
+  echo 'Usage: mise run shell:fallback <fish|zsh|/absolute/shell|off>'
+  exit "$(( $# != 1 ))"
+fi
+target="$1"
+if [[ "$target" == off ]]; then
+  exec "$MISE_BIN" set --global DOTFILES_LOGIN_SHELL=
+fi
+if [[ "$target" != /* ]]; then target="$(command -v "$target" || true)"; fi
+[[ -n "$target" && -x "$target" && ! -d "$target" ]] || { echo 'Shell must be an executable file' >&2; exit 1; }
+# Validate Bash startup can quote/exec this value; the value never becomes code.
+exec "$MISE_BIN" set --global "DOTFILES_LOGIN_SHELL=$target"

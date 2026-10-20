@@ -4,15 +4,26 @@ min_version = "2026.10.15"
 dotfiles_root = "{{config_source | canonicalize | dirname}}"
 
 [env]
-DOTFILES_ROOT = "{{config_source | canonicalize | dirname}}"
+DOTFILES_ROOT = "{{vars.dotfiles_root}}"
+HYDRA_FULL_ERROR = "1"
+HF_HOME = "{{vars.dotfiles_root}}/persistent/cache/huggingface"
+OLLAMA_MODELS = "{{vars.dotfiles_root}}/persistent/cache/ollama"
+PIP_CACHE_DIR = "{{vars.dotfiles_root}}/persistent/cache/pip"
+UV_CACHE_DIR = "{{vars.dotfiles_root}}/persistent/cache/uv"
+SKILLS_HOME = "{{vars.dotfiles_root}}/persistent/skills"
+_.path = ["{{vars.dotfiles_root}}/bin", "{{system_brew_prefix}}/bin", "{{system_brew_prefix}}/sbin"]
 
 [settings]
 # Status/configuration tasks must not install the entire toolbox as a side effect.
 task.run_auto_install = false
 
 # Mise owns versions, downloads, verification, PATH and shims for portable tools.
-# Install only this layer with ./install --only tools.
+# Install this layer with `mise install`; change versions with `mise use -g`.
 [tools]
+node = "lts"
+python = "3.13"
+"aqua:ajeetdsouza/zoxide" = "latest"
+"aqua:tmux/tmux-builds" = "3.7c"
 "aqua:starship/starship" = "latest"
 "aqua:astral-sh/uv" = "latest"
 "aqua:jesseduffield/lazygit" = "latest"
@@ -31,13 +42,32 @@ linux-arm64 = { asset_pattern = "gdu_linux_arm64.tgz" }
 macos-x64 = { asset_pattern = "gdu_darwin_amd64.tgz" }
 macos-arm64 = { asset_pattern = "gdu_darwin_arm64.tgz" }
 
+# Upstream publishes thumbs binaries for x86_64; mise builds the same version
+# with its cargo backend on ARM, including installing the Rust toolchain.
+[tools."github:fcsonline/tmux-thumbs"]
+version = "0.8.0"
+os = ["linux/x64", "macos/x64"]
+[tools."github:fcsonline/tmux-thumbs".platforms]
+linux-x64 = { asset_pattern = "tmux-thumbs_0.8.0_x86_64-unknown-linux-musl.tar.gz" }
+macos-x64 = { asset_pattern = "tmux-thumbs_0.8.0_x86_64-apple-darwin.zip" }
+
+[tools.rust]
+version = "stable"
+os = ["linux/arm64", "macos/arm64"]
+
+[tools."cargo:fcsonline/tmux-thumbs"]
+version = "tag:0.8.0"
+locked = true
+os = ["linux/arm64", "macos/arm64"]
+
 [bootstrap.repos]
-"~/.oh-my-zsh" = { url = "https://github.com/ohmyzsh/ohmyzsh.git" }
-"~/.zplug" = { url = "https://github.com/zplug/zplug.git" }
-"~/.bash_it" = { url = "https://github.com/Bash-it/bash-it.git" }
+"~/.local/share/dotfiles/zsh-autosuggestions" = { url = "https://github.com/zsh-users/zsh-autosuggestions.git", depth = 1 }
+"~/.local/share/dotfiles/fast-syntax-highlighting" = { url = "https://github.com/zdharma-continuum/fast-syntax-highlighting.git", depth = 1 }
+"~/.local/share/dotfiles/powerlevel10k" = { url = "https://github.com/romkatv/powerlevel10k.git", depth = 1 }
+"~/.tmux/plugins/tmux" = { url = "https://github.com/catppuccin/tmux.git", ref = "v2.1.3", depth = 1 }
+"~/.tmux/plugins/tmux-thumbs" = { url = "https://github.com/fcsonline/tmux-thumbs.git", ref = "0.8.0", depth = 1 }
 
 [bootstrap.hooks]
-post-repos = 'bash "{{vars.dotfiles_root}}/mise/scripts/shell-frameworks"'
 pre-dotfiles = 'bash "{{vars.dotfiles_root}}/mise/scripts/prepare"'
 
 [dotfiles]
@@ -50,133 +80,52 @@ pre-dotfiles = 'bash "{{vars.dotfiles_root}}/mise/scripts/prepare"'
 "~/.config/workmux/config.yaml" = "config/workmux/config.yaml"
 "~/.config/uv/uv.toml" = "config/uv/uv.toml"
 "~/.shell" = "shell"
-"~/.devbox" = "devbox"
 "~/.config/nvim" = "nvim"
 "~/.config/fish/config.fish" = "config.fish"
 "~/.config/starship.toml" = "starship.toml"
 
+# Optional applications are selected with -E apps, or declared in the private repo.
+# File tasks contain host operations, never tool download/version-manager code.
 [tasks.dotfiles]
-dir = "{{vars.dotfiles_root}}"
-description = "Deploy configuration and guarded persistent links"
-run = 'bash install --only dotfiles'
-
-[tasks.preview]
-dir = "{{vars.dotfiles_root}}"
-description = "Preview the full machine bootstrap"
-run = 'bash install --dry-run'
+description = "Apply configuration links and preserve existing mutable data"
+run = '"{{mise_bin}}" -C "$HOME" dot apply --yes'
 
 [tasks.status]
-dir = "{{vars.dotfiles_root}}"
-description = "Show declared tools and configuration state"
+description = "Inspect managed tools and dotfiles"
 run = ['"{{mise_bin}}" -C "$HOME" ls', '"{{mise_bin}}" -C "$HOME" dot status']
 
-[tasks."setup:basic_packages"]
-dir = "{{vars.dotfiles_root}}"
-description = "Install system packages for the current package manager"
-run = '"{{mise_bin}}" -E system bootstrap --only packages --yes'
+[tasks.update]
+description = "Fast-forward public and registered private repos, then bootstrap"
+file = "{{vars.dotfiles_root}}/mise/operations/update"
 
-[tasks."setup:ollama"]
-dir = "{{vars.dotfiles_root}}"
-description = "Install Ollama with mise (server startup remains explicit)"
-run = 'bash mise/scripts/tool ollama'
+[tasks."system:packages"]
+description = "Install optional OS packages using the host package manager"
+run = '"{{mise_bin}}" -C "$HOME" -E system bootstrap --only packages --yes'
 
-[tasks."setup:autojump"]
-dir = "{{vars.dotfiles_root}}"
-run = 'bash devbox/setup/autojump'
+[tasks."shell:fallback"]
+description = "Choose the interactive shell used when the login shell is Bash"
+file = "{{vars.dotfiles_root}}/mise/operations/shell-fallback"
 
-[tasks."setup:chatgpt_cli"]
-dir = "{{vars.dotfiles_root}}"
-run = 'bash devbox/setup/chatgpt_cli'
+[tasks."ssh:authorize"]
+description = "Authorize a public SSH key idempotently"
+file = "{{vars.dotfiles_root}}/mise/operations/ssh-authorize"
 
-[tasks."setup:claude"]
-dir = "{{vars.dotfiles_root}}"
-run = 'bash devbox/setup/claude'
+[tasks."ssh:serve"]
+description = "Start a user SSH server on an unprivileged port"
+file = "{{vars.dotfiles_root}}/mise/operations/ssh-serve"
 
-[tasks."setup:codex"]
-dir = "{{vars.dotfiles_root}}"
-run = 'bash devbox/setup/codex'
+[tasks."skills:init"]
+description = "Initialize an empty Skills Library (requires the apps profile)"
+file = "{{vars.dotfiles_root}}/mise/operations/skills-init"
 
-[tasks."setup:codex_cli"]
-dir = "{{vars.dotfiles_root}}"
-run = 'bash devbox/setup/codex_cli'
+[tasks."vscode:login"]
+description = "Authenticate VS Code tunnels (requires the apps profile)"
+run = "code tunnel user login"
 
-[tasks."setup:conda"]
-dir = "{{vars.dotfiles_root}}"
-run = 'bash devbox/setup/conda'
+[tasks."vscode:serve"]
+description = "Run a VS Code tunnel in the foreground (requires the apps profile)"
+run = "code tunnel"
 
-[tasks."setup:csvlens"]
-dir = "{{vars.dotfiles_root}}"
-run = 'bash devbox/setup/csvlens'
-
-[tasks."setup:gdu"]
-dir = "{{vars.dotfiles_root}}"
-run = 'bash devbox/setup/gdu'
-
-[tasks."setup:homebrew"]
-dir = "{{vars.dotfiles_root}}"
-run = 'bash devbox/setup/homebrew'
-
-[tasks."setup:jless"]
-dir = "{{vars.dotfiles_root}}"
-run = 'bash devbox/setup/jless'
-
-[tasks."setup:lazygit"]
-dir = "{{vars.dotfiles_root}}"
-run = 'bash devbox/setup/lazygit'
-
-[tasks."setup:neovim"]
-dir = "{{vars.dotfiles_root}}"
-run = 'bash devbox/setup/neovim'
-
-[tasks."setup:nvm"]
-dir = "{{vars.dotfiles_root}}"
-run = 'bash devbox/setup/nvm'
-
-[tasks."setup:pyenv"]
-dir = "{{vars.dotfiles_root}}"
-run = 'bash devbox/setup/pyenv'
-
-[tasks."setup:pytorch_conda"]
-dir = "{{vars.dotfiles_root}}"
-run = 'bash devbox/setup/pytorch_conda'
-
-[tasks."setup:shell_fallback"]
-dir = "{{vars.dotfiles_root}}"
-run = 'bash devbox/setup/shell_fallback'
-
-[tasks."setup:skills"]
-dir = "{{vars.dotfiles_root}}"
-run = 'bash devbox/setup/skills'
-
-[tasks."setup:snipkit"]
-dir = "{{vars.dotfiles_root}}"
-run = 'bash devbox/setup/snipkit'
-
-[tasks."setup:ssh_public_key"]
-dir = "{{vars.dotfiles_root}}"
-run = 'bash devbox/setup/ssh_public_key'
-
-[tasks."setup:ssh_server"]
-dir = "{{vars.dotfiles_root}}"
-run = 'bash devbox/setup/ssh_server'
-
-[tasks."setup:tmux"]
-dir = "{{vars.dotfiles_root}}"
-run = 'bash devbox/setup/tmux'
-
-[tasks."setup:uv"]
-dir = "{{vars.dotfiles_root}}"
-run = 'bash devbox/setup/uv'
-
-[tasks."setup:vscode_tunnel"]
-dir = "{{vars.dotfiles_root}}"
-run = 'bash devbox/setup/vscode_tunnel'
-
-[tasks."setup:workmux"]
-dir = "{{vars.dotfiles_root}}"
-run = 'bash devbox/setup/workmux'
-
-[tasks.setup]
-dir = "{{vars.dotfiles_root}}"
-description = "Find and run public/private setups (public first; DEVBOX_SETUP_PATH overrides)"
-run = 'bash devbox/libexec/devbox setup'
+[tasks."workmux:configure"]
+description = "Configure workmux agent hooks"
+run = "workmux setup"

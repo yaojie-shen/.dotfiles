@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-root="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
-source "$root/mise/scripts/ensure-mise"
-ensure_mise
-exec "$MISE_BIN" -C "$root" -E system bootstrap --only packages --yes "$@"

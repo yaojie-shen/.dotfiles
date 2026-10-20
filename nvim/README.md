@@ -11,8 +11,8 @@ To install it:
 sudo apt install fd-find
 ```
 
-This is also included in the devbox:
+This is also included in the optional mise system package profile:
 
 ```bash
-devbox setup basic_packages
+mise -E system bootstrap --only packages
 ```

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Register config roots without copying or overwriting the user's mise config.
+# Register native config roots without copying or replacing user config.
 set -euo pipefail
 root="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 source "$root/mise/scripts/ensure-mise"
@@ -7,38 +7,32 @@ ensure_mise
 conf="${XDG_CONFIG_HOME:-$HOME/.config}/mise/conf.d"
 mkdir -p "$conf"
 for entry in 50-dotfiles 60-dotfiles-private; do
-  source_dir="$root"
-  if [[ "$entry" == 60-dotfiles-private ]]; then
-    source_dir="${DOTFILES_CUSTOM_ROOT:-$root/persistent/custom}"
-    # Preserve the old top-level persistent config's precedence.
-    [[ ! -f "$root/persistent/mise.toml" ]] || source_dir="$root/persistent"
-  fi
   target="$conf/$entry"
+  marker="${conf%/conf.d}/.dotfiles-registration-$entry"
   if [[ -e "$target" && ! -L "$target" ]]; then
     echo "Refusing to replace $target; move it aside first" >&2; exit 1
   fi
-  marker="${conf%/conf.d}/.dotfiles-registration-$entry"
-  managed=0
-  if [[ -L "$target" && -f "$marker" && ! -L "$marker" ]]; then
-    [[ "$(readlink "$target")" != "$(cat "$marker")" ]] || managed=1
+  if [[ -L "$target" ]]; then
+    if [[ ! -f "$marker" || -L "$marker" || "$(readlink "$target")" != "$(cat "$marker")" ]]; then
+      echo "Refusing to change unowned registration: $target" >&2; exit 1
+    fi
+  fi
+  source_dir="$root"
+  if [[ "$entry" == 60-dotfiles-private ]]; then
+    source_dir="${DOTFILES_CUSTOM_ROOT:-$root/persistent/custom}"
+    if [[ -z "${DOTFILES_CUSTOM_ROOT:-}" && -L "$target" ]]; then
+      source_dir="$(readlink "$target")"
+    fi
+    if [[ ( -n "${DOTFILES_CUSTOM_ROOT:-}" || -d "$source_dir" ) && ! -f "$source_dir/mise.toml" ]]; then
+      echo "Private repo requires mise.toml: $source_dir" >&2; exit 1
+    fi
   fi
   if [[ ! -f "$source_dir/mise.toml" ]]; then
-    # Remove an obsolete registration only when our record proves ownership.
-    if [[ -L "$target" ]]; then
-      if (( !managed )); then
-        echo "Refusing to remove unowned registration: $target" >&2; exit 1
-      fi
-      rm "$target" "$marker"
-    fi
+    if [[ -L "$target" ]]; then rm "$target" "$marker"; fi
     continue
   fi
   source_dir="$(cd "$source_dir" && pwd -P)"
-  if [[ -L "$target" && "$(readlink "$target")" != "$source_dir" ]]; then
-    if (( !managed )); then
-      echo "Refusing to replace unowned registration: $target" >&2; exit 1
-    fi
-    rm "$target"
-  fi
+  if [[ -L "$target" && "$(readlink "$target")" != "$source_dir" ]]; then rm "$target"; fi
   [[ -L "$target" ]] || ln -s "$source_dir" "$target"
   marker_temp="$(mktemp "${marker}.XXXXXX")"
   printf '%s\n' "$source_dir" > "$marker_temp"

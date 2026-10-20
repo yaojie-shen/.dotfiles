@@ -1,0 +1,22 @@
+# Optional applications: mise -E apps install
+[env]
+MAMBA_ROOT_PREFIX = "{{vars.dotfiles_root}}/persistent/micromamba"
+
+[tools]
+"aqua:anthropics/claude-code" = "latest"
+"aqua:openai/codex" = "latest"
+"aqua:ollama/ollama" = "latest"
+"github:kardolus/chatgpt-cli" = { version = "1.11.0", rename_exe = "chatgpt" }
+"github:lemoony/snipkit" = "1.8.1"
+"github:yaojie-shen/Skills-Manager-TUI" = "0.1.3"
+"github:mamba-org/micromamba-releases" = "latest"
+
+# Use an explicit VS Code release so `mise upgrade` has a meaningful version.
+# Update this declaration with mise use -E apps http:code@<release>.
+[tools."http:code"]
+version = "1.105.1"
+[tools."http:code".platforms]
+linux-x64 = { url = "https://update.code.visualstudio.com/{{version}}/cli-linux-x64/stable" }
+linux-arm64 = { url = "https://update.code.visualstudio.com/{{version}}/cli-linux-arm64/stable" }
+macos-x64 = { url = "https://update.code.visualstudio.com/{{version}}/cli-darwin-x64/stable" }
+macos-arm64 = { url = "https://update.code.visualstudio.com/{{version}}/cli-darwin-arm64/stable" }

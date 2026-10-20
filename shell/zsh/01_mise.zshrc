@@ -3,7 +3,6 @@
 if command -v mise >/dev/null 2>&1; then
     if [[ -o interactive ]]; then
         eval "$(mise activate zsh)"
-    else
-        eval "$(mise activate zsh --shims)"
     fi
+    eval "$(mise env --shell zsh)"
 fi

@@ -11,8 +11,6 @@
 "apt:htop" = { os = "linux" }
 "apt:speedometer" = { os = "linux" }
 "apt:atop" = { os = "linux" }
-"apt:npm" = { os = "linux" }
-"apt:python3-venv" = { os = "linux" }
 "apt:fd-find" = { os = "linux" }
 "apt:ripgrep" = { os = "linux" }
 "apt:tree" = { os = "linux" }
@@ -26,7 +24,6 @@
 "brew:nano" = { os = "macos" }
 "brew:git-lfs" = { os = "macos" }
 "brew:htop" = { os = "macos" }
-"brew:node" = { os = "macos" }
 "brew:fd" = { os = "macos" }
 "brew:ripgrep" = { os = "macos" }
 "brew:tree" = { os = "macos" }
@@ -40,8 +37,6 @@
 "dnf:nano" = { os = "linux" }
 "dnf:git-lfs" = { os = "linux" }
 "dnf:htop" = { os = "linux" }
-"dnf:nodejs" = { os = "linux" }
-"dnf:python3" = { os = "linux" }
 "dnf:fd-find" = { os = "linux" }
 "dnf:ripgrep" = { os = "linux" }
 "dnf:tree" = { os = "linux" }
@@ -55,15 +50,12 @@
 "pacman:nano" = { os = "linux" }
 "pacman:git-lfs" = { os = "linux" }
 "pacman:htop" = { os = "linux" }
-"pacman:nodejs" = { os = "linux" }
-"pacman:python" = { os = "linux" }
 "pacman:fd" = { os = "linux" }
 "pacman:ripgrep" = { os = "linux" }
 "pacman:tree" = { os = "linux" }
 "pacman:pv" = { os = "linux" }
 "pacman:pigz" = { os = "linux" }
 "pacman:jq" = { os = "linux" }
-"apt:tmux" = { os = "linux" }
-"brew:tmux" = { os = "macos" }
-"dnf:tmux" = { os = "linux" }
-"pacman:tmux" = { os = "linux" }
+"apt:bash-completion" = { os = "linux" }
+"dnf:bash-completion" = { os = "linux" }
+"pacman:bash-completion" = { os = "linux" }

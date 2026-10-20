@@ -2,7 +2,7 @@
 set -euo pipefail
 root="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 # Existing agent histories/directories remain where they are. Never merge them.
-# Explicitly managed rc files used to be forced by Dotbot. Keep recoverable backups.
+# Back up managed rc files before native mise applies symlinks.
 # Other native mise links stop on a real-file conflict for manual review.
 for name in .bashrc .zshrc .config/fish/config.fish .config/starship.toml; do
   target="$HOME/$name"

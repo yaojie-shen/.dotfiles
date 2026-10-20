@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ $# != 1 || "$1" == --help ]]; then
+  echo 'Usage: mise run ssh:authorize "ssh-ed25519 AAAA... comment"'
+  exit "$(( $# != 1 ))"
+fi
+key="$1"
+[[ "$key" != *$'\n'* && "$key" != *$'\r'* ]] || { echo 'Expected one public key' >&2; exit 1; }
+temp="$(mktemp)"; trap 'rm -f "$temp"' EXIT
+printf '%s\n' "$key" > "$temp"
+ssh-keygen -l -f "$temp" >/dev/null
+umask 077
+mkdir -p "$HOME/.ssh"
+file="$HOME/.ssh/authorized_keys"
+touch "$file"
+chmod 700 "$HOME/.ssh"; chmod 600 "$file"
+if ! grep -qxF -- "$key" "$file"; then
+  if [[ -s "$file" && -n "$(tail -c 1 "$file")" ]]; then printf '\n' >> "$file"; fi
+  printf '%s\n' "$key" >> "$file"
+fi

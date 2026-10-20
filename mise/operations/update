@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="${DOTFILES_ROOT:?DOTFILES_ROOT must be set by mise}"
+private="${XDG_CONFIG_HOME:-$HOME/.config}/mise/conf.d/60-dotfiles-private"
+update() {
+  local repo="$1" top
+  top="$(git -C "$repo" rev-parse --show-toplevel)"
+  [[ "$(cd "$repo" && pwd -P)" == "$(cd "$top" && pwd -P)" ]] || {
+    echo "Not a repository root: $repo" >&2; return 1;
+  }
+  [[ -z "$(git -C "$repo" status --porcelain)" ]] || {
+    echo "Commit or stash changes before updating: $repo" >&2; return 1;
+  }
+  git -C "$repo" pull --ff-only
+}
+update "$root"
+if [[ -L "$private" ]]; then update "$private"; fi
+cd "$HOME"
+exec "$MISE_BIN" bootstrap --yes --skip-dirty

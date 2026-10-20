@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+library="${SKILLS_HOME:?SKILLS_HOME must be set by mise}"
+if [[ -f "$library/.skills-meta/config.toml" ]]; then
+  echo "Skills Library already initialized: $library"; exit 0
+fi
+if [[ -e "$library" && ! -d "$library" ]]; then
+  echo "Library path is not a directory: $library" >&2; exit 1
+fi
+if [[ -d "$library" && -n "$(ls -A "$library")" ]]; then
+  echo "Refusing to initialize nonempty library: $library" >&2; exit 1
+fi
+command -v skills >/dev/null || { echo 'Run mise -E apps install first' >&2; exit 1; }
+mkdir -p "$library"
+exec skills --root "$library" init

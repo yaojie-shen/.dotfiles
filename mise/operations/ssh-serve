@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+port="${1:-}"
+if [[ $# != 1 || ! "$port" =~ ^[0-9]{4,5}$ ]] || ((10#$port < 1024 || 10#$port > 65535)); then
+  echo 'Usage: mise run ssh:serve <port:1024-65535>' >&2; exit 1
+fi
+sshd="$(command -v sshd || true)"
+[[ -n "$sshd" ]] || { echo 'Install the system OpenSSH server first' >&2; exit 1; }
+umask 077
+mkdir -p "$HOME/.ssh"
+key="$HOME/.ssh/ssh_host_ed25519_key"
+[[ -f "$key" ]] || ssh-keygen -t ed25519 -f "$key" -N ''
+# Foreground lifecycle is explicit; task failure is visible to the caller.
+exec "$sshd" -D -e -h "$key" -p "$port" -o "PidFile=$HOME/.ssh/sshd.pid"
