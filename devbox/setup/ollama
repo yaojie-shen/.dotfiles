@@ -1,3 +1,5 @@
 #!/usr/bin/env bash
-
-curl -fsSL https://ollama.com/install.sh | sh
+# Compatibility entrypoint. Versions/downloads/PATH are owned by mise.
+set -euo pipefail
+root="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+exec bash "$root/mise/scripts/tool" ollama "$@"

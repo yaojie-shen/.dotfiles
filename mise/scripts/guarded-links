@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Only the guarded links that mise cannot express declaratively live here.
+# TSV: kind (dir/file/link/linux-dir), home-relative target, repo-relative source.
+set -euo pipefail
+root="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+manifest="${1:-$root/mise/persistent.tsv}"
+base="${2:-$root}"
+while IFS=$'\t' read -r kind target source; do
+  [[ -n "$kind" && "$kind" != \#* ]] || continue
+  [[ "$kind" != linux-dir || "$(uname -s)" == Linux ]] || continue
+  if [[ -z "$target" || "$target" == /* || "$target" == . || "/$target/" == *"/../"* ]]; then
+    echo "Invalid guarded-link target; must stay inside HOME: $target" >&2
+    exit 1
+  fi
+  target="$HOME/$target"
+  case "$source" in
+    /*) ;;
+    '~/'*) source="$HOME/${source#\~/}" ;;
+    *) source="$base/$source" ;;
+  esac
+  case "$kind" in
+    dir|linux-dir) mkdir -p "$source" ;;
+    file) mkdir -p "$(dirname "$source")"; [[ -e "$source" ]] || touch "$source" ;;
+    link) ;;
+    *) echo "Unknown persistent entry: $kind" >&2; exit 1 ;;
+  esac
+  if [[ -e "$target" && ! -L "$target" ]]; then
+    echo "Preserved existing $target"
+    continue
+  fi
+  # Avoid following a symlink-to-directory when replacing it (portable ln -sfn).
+  if [[ -L "$target" && "$(readlink "$target")" == "$source" ]]; then continue; fi
+  mkdir -p "$(dirname "$target")"
+  [[ ! -L "$target" ]] || rm "$target"
+  ln -s "$source" "$target"
+  echo "Linked $target"
+done < "$manifest"

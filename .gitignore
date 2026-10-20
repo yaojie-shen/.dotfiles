@@ -171,3 +171,8 @@ persistent/
 lazy-lock.json
 
 .vscode
+
+# Machine-local mise overrides and generated resolution state
+mise.local.toml
+mise.*.local.toml
+mise.lock

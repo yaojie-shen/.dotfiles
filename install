@@ -1,80 +1,76 @@
 #!/usr/bin/env bash
-
-set -e
-
-CONFIG="install.conf.yaml"
-DOTBOT_DIR="dotbot"
-
-DOTBOT_BIN="bin/dotbot"
-BASEDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-# Parse our own options; everything else is forwarded to dotbot.
-UPDATE=0
-DOTBOT_ARGS=()
+set -euo pipefail
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+update=0; preview=0; args=()
 for arg in "$@"; do
   case "$arg" in
-    -u|-U|--update)
-      UPDATE=1
-      ;;
-    *)
-      DOTBOT_ARGS+=("$arg")
-      ;;
+    -u|-U|--update) update=1 ;;
+    -n|--dry-run) preview=1; args+=(--dry-run) ;;
+    -h|--help)
+      cat <<'HELP'
+Usage: ./install [--dry-run] [--update] [mise bootstrap options]
+Installs mise if needed, registers this checkout globally, then runs mise bootstrap.
+  --only dotfiles    Deploy configuration/persistent links without tool downloads
+  --only tools       Install declared tools
+  --skip repos      Skip shell framework clones/initialization
+  --dry-run         Preview bootstrap; no HOME changes (mise may download to /tmp)
+  --update          Fast-forward public and existing private repos before bootstrap
+Other arguments go to mise bootstrap. Default run never pulls Git repositories.
+HELP
+      exit 0 ;;
+    *) args+=("$arg") ;;
   esac
 done
-set -- "${DOTBOT_ARGS[@]}"
-
-# Dotbot
-[ "$UPDATE" -eq 1 ] && echo -e "\033[34m==> Updating Dotbot\033[0m" >&2
-cd "${BASEDIR}"
-git -C "${DOTBOT_DIR}" submodule sync --quiet --recursive
-git submodule update --init --recursive "${DOTBOT_DIR}"
-
-# Pull latest dotfile & custom (only with -u/-U/--update)
-if [ "$UPDATE" -eq 1 ]; then
-  echo -e "\033[34m==> Updating main project...\033[0m"
-  (set +e && git -C "$BASEDIR" pull && echo -e "\033[32m✔ Main project updated\033[0m")
-  CUSTOM_DIR="$BASEDIR/persistent/custom"
-  if [ -d "$CUSTOM_DIR" ]; then
-    echo -e "\033[34m==> Updating custom project...\033[0m"
-    if git -C "$CUSTOM_DIR" pull; then
-      echo -e "\033[32m✔ Custom project updated\033[0m"
-    else
-      echo -e "\033[33m⚠ Custom project pull failed (ignored)\033[0m"
-    fi
+if ((update)); then
+  if ((preview)); then echo 'Would git pull --ff-only public and private repositories';
   else
-    echo -e "\033[33m⚠ Custom project not found, skipping\033[0m"
+    git -C "$root" pull --ff-only
+    update_private="${DOTFILES_CUSTOM_ROOT:-$root/persistent/custom}"
+    if [[ -d "$update_private/.git" || -f "$update_private/.git" ]]; then
+      git -C "$update_private" pull --ff-only
+    fi
   fi
 fi
-
-# Print a banner to separate the output of each dotbot run.
-banner() {
-  echo -en "\033[1;36m"
-  echo "╔══════════════════════════════════════════════════════════╗"
-  printf "║ %-56s ║\n" "$1"
-  printf "║ %-56s ║\n" "$2"
-  echo "╚══════════════════════════════════════════════════════════╝"
-  echo -en "\033[0m"
-}
-
-# Dotbot runs shell steps with $SHELL. The configs are written for bash, and under
-# a fish login shell those steps silently do nothing, so pin bash for both runs.
-export SHELL="${BASH}"
-
-banner "DOTBOT: BASE CONFIG" "${CONFIG}"
-(set +e && "${BASEDIR}/${DOTBOT_DIR}/${DOTBOT_BIN}" -d "${BASEDIR}" -c "${CONFIG}" "${@}" || true)
-
-# Optional private/custom dotbot config (kept outside this repo).
-# Convention:
-# - persistent/install.conf.yaml, or
-# - persistent/custom/install.conf.yaml (the `custom` folder can be a git repository)
-if [[ -f "${BASEDIR}/persistent/install.conf.yaml" ]]; then
-  CUSTOM_CONFIG="${BASEDIR}/persistent/install.conf.yaml"
-elif [[ -f "${BASEDIR}/persistent/custom/install.conf.yaml" ]]; then
-  CUSTOM_CONFIG="${BASEDIR}/persistent/custom/install.conf.yaml"
+# Preview keeps downloads and mise trust/cache writes outside the real HOME.
+if ((preview)); then
+  temp="$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-preview.XXXXXX")"
+  trap 'rm -rf "$temp"' EXIT
+  export MISE_INSTALL_DIR="$temp/bin" MISE_DATA_DIR="$temp/data" MISE_CACHE_DIR="$temp/cache" MISE_STATE_DIR="$temp/state"
+  export XDG_CONFIG_HOME="$temp/config"
 fi
-
-if [[ -n "${CUSTOM_CONFIG}" ]]; then
-  CUSTOM_DIR="${CUSTOM_CONFIG%/*}"
-  banner "DOTBOT: CUSTOM CONFIG" "${CUSTOM_CONFIG#"${BASEDIR}/"}"
-  (set +e && bash "${BASEDIR}/${DOTBOT_DIR}/${DOTBOT_BIN}" -d "${CUSTOM_DIR}" -c "${CUSTOM_CONFIG}" "${@}" || true)
+source "$root/mise/scripts/ensure-mise"
+ensure_mise
+export PATH="$(dirname "$MISE_BIN"):$PATH"
+if ((preview)); then
+  echo "Would register this public checkout and its optional private mise.toml"
 fi
+if ((!preview)); then bash "$root/mise/scripts/custom-root"; fi
+# In preview this registration lives entirely under the temporary config directory.
+bash "$root/mise/scripts/register"
+# Explicit installer invocation authorizes only this checkout, never every config.
+"$MISE_BIN" trust "$root/mise.toml"
+deploy_dotfiles=1
+previous=''
+for arg in "${args[@]}"; do
+  value="$arg"
+  if [[ "$previous" == --only || "$arg" == --only=* ]]; then
+    value="${value#--only=}"
+    case ",$value," in *,dotfiles,*) deploy_dotfiles=1 ;; *) deploy_dotfiles=0 ;; esac
+  elif [[ "$previous" == --skip || "$arg" == --skip=* ]]; then
+    value="${value#--skip=}"
+    case ",$value," in *,dotfiles,*) deploy_dotfiles=0 ;; esac
+  fi
+  previous="$arg"
+done
+for private in "$root/persistent" "${DOTFILES_CUSTOM_ROOT:-$root/persistent/custom}"; do
+  if ((deploy_dotfiles)) && [[ -f "$private/install.conf.yaml" && ! -f "$private/mise.toml" ]]; then
+    echo 'Private Dotbot config found; migrate before applying (see mise/README.md):' >&2
+    echo "  python3 $root/mise/scripts/migrate-private $private/install.conf.yaml" >&2
+    echo 'Stopping before bootstrap so private setup is not silently omitted.' >&2
+    exit 1
+  fi
+done
+# Use global fragment order (public, private, user), also when invoked from the checkout.
+export DOTFILES_ROOT="$root"
+cd "$HOME"
+"$MISE_BIN" bootstrap --yes --skip-dirty "${args[@]}"

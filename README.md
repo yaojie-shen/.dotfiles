@@ -1,82 +1,127 @@
 # Dotfiles
 
-Personal dotfiles for setting up a consistent shell, editor, terminal, and developer-tool environment across machines. The repository uses [Dotbot](https://github.com/anishathalye/dotbot) to create symlinks and run bootstrap commands, and includes a small `devbox` command collection for common setup scripts and reusable shell snippets.
+Shell, editor, terminal and developer tools for Linux and macOS. This experimental
+branch uses [mise](https://mise.jdx.dev/bootstrap.html) for machine bootstrap,
+dotfile deployment and portable tool installation. It no longer requires Dotbot
+or Git submodules. Existing `devbox` setup/snippet commands remain available.
 
-## What is included
-
-- Zsh and Bash startup configuration
-- Shared shell aliases, exports, and functions
-- Tmux configuration
-- Conda configuration
-- Neovim configuration
-- `devbox` setup scripts for tools such as Homebrew, Neovim, pyenv, and other development utilities
-- `devbox` snippets for recurring command-line workflows
-- A `persistent/` area for machine-local files, downloads, projects, caches, and optional private customizations
-
-## Installation
-
-Clone the repository, including submodules, and run the installer:
+## Install or preview
 
 ```bash
-git clone --recurse-submodules git@github.com:Yaojie-Shen/.dotfiles.git ~/.dotfiles
+git clone https://github.com/Yaojie-Shen/.dotfiles.git ~/.dotfiles
 cd ~/.dotfiles
+./install --dry-run
 ./install
 ```
 
-The installer updates the Dotbot submodule, pulls the latest repository changes, and applies `install.conf.yaml`. It links files such as `~/.zshrc`, `~/.bashrc`, `~/.tmux.conf`, `~/.condarc`, `~/.config/nvim`, `~/.shell`, and `~/.devbox`.
+The installer bootstraps mise **2026.10.15** if a sufficiently recent version is
+not already available. Linux x86_64/ARM64 and macOS Intel/Apple Silicon downloads
+are verified against pinned SHA-256 hashes. Initial requirements are Bash, curl,
+Git, and `sha256sum` or `shasum`; Homebrew and Python are not bootstrap requirements.
 
-If present, an additional private Dotbot config is also applied from either:
-
-- `persistent/install.conf.yaml`
-- `persistent/custom/install.conf.yaml`
-
-## Usage
-
-After installation, open a new shell or source your shell config:
+Default installation registers this checkout as a global mise config fragment,
+clones the shell frameworks, backs up managed rc files, deploys configuration and
+persistent links, and installs the declared portable tools. It skips framework repositories with local changes and does not pull Git
+repositories unless requested. System packages and host-specific setup are opt-in.
 
 ```bash
-source ~/.zshrc
-# or
-source ~/.bashrc
+./install --only dotfiles        # configuration and persistent links
+./install --only tools           # portable tool versions, no dotfile deployment
+./install --only repos           # Oh My Zsh, zplug, Bash-it and Bash-it initialization
+./install --skip repos           # omit shell frameworks
+./install --update               # public/private git pull --ff-only, then bootstrap
+mise run setup:basic_packages    # opt-in OS packages; may need sudo
+mise run setup:tmux              # existing Linux source build using system libraries
+mise run setup:shell_fallback -- --shell fish
 ```
 
-Use `devbox` to list and run setup scripts:
+`--dry-run` keeps mise downloads/trust/cache in a temporary directory and does not
+write HOME or persistent data. Hooks are printed rather than executed. Native
+mise may report an existing rc file as a conflict during preview: the real apply
+backs it up in the preparation hook. Other configuration conflicts require review.
+`--update` stops if either Git pull fails; it never merges divergent branches.
+
+## Public and private, together
+
+The public repo declares shared configuration. An optional independent inhouse
+repo stays under `persistent/custom/`, or at an external path:
 
 ```bash
+DOTFILES_CUSTOM_ROOT=/path/to/inhouse ./install
+```
+
+This creates an ignored `persistent/custom` symlink when needed; it never replaces
+an existing real private directory. Subsequent runs reuse that link. Neither the
+private files nor their Git history are copied into the public repository.
+
+Global mise configuration loads in this order:
+
+1. `~/.config/mise/conf.d/50-dotfiles/` → this public checkout
+2. `~/.config/mise/conf.d/60-dotfiles-private/` → the private checkout, if it has `mise.toml`
+3. Your normal `~/.config/mise/config.toml` and local configuration
+
+Private config may add or override tools, dotfiles, environment and tasks. Use
+names such as `inhouse:setup` for private tasks to keep origins clear. The installer
+runs through these global fragments so private overrides apply consistently.
+Project-local mise configs can still override global values inside that project.
+
+Existing private shell files, setup scripts and snippets retain their conventions:
+
+- `persistent/custom/shell/*.sh` / `*.fish`, in filename order
+- `persistent/custom/devbox/setup/*`
+- `persistent/custom/devbox/snippets/*`
+- `~/.persistent/custom.sh` / `custom.fish` take precedence over the shell directory
+
+`devbox setup` still chooses the public script first when names collide. Set
+`DEVBOX_SETUP_PATH` explicitly to change this order. See [mise/README.md](mise/README.md)
+for examples, old private Dotbot conversion, rollback and verification.
+
+## Tools, setup and snippets
+
+```bash
+mise tasks ls
+mise run setup -- --list         # combined public/private script discovery
+mise run setup:gdu
+mise run setup:gdu -- --status
+mise run setup:gdu -- --version 5.38.0
+mise run setup:workmux -- --setup # optional agent hooks
+mise run status
+
+# Existing commands continue to work:
 devbox setup --list
-devbox setup <script_name>
-```
-
-Examples:
-
-```bash
-devbox setup homebrew
-devbox setup neovim
-devbox setup pyenv
-```
-
-To install only `devbox`, without the rest of the dotfiles, run `devbox/install.sh` from a checkout, or:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Yaojie-Shen/.dotfiles/main/devbox/install.sh | bash
-```
-
-It clones the repository to `~/.dotfiles` if missing, links `~/.devbox` to its `devbox/` like `./install` does, and adds `devbox init` for bash, zsh and fish: a managed block in `~/.bashrc` and `~/.zshrc`, and `~/.config/fish/conf.d/devbox.fish`. Shells that already load devbox through the dotfiles `~/.shell` setup are skipped. Pass `--uninstall` to undo.
-
-Use snippets for reusable command-line workflows:
-
-```bash
+devbox setup gdu
 devbox snippets --list
 ```
 
-Neovim is configured under `nvim/` and is linked to `~/.config/nvim` by the installer.
+Mise owns downloads, versions, verification and PATH for starship, uv, lazygit,
+Neovim, jless, csvlens, gdu and workmux. Ollama is available on demand. Tool-specific
+host configuration remains in explicit setup tasks: SSH, shell fallback, tmux,
+Conda, NVM/pyenv, agent installation/onboarding, skills, and VS Code tunnels.
+Existing environments are preserved. New runtime projects can use `mise use node`
+and `mise use python` directly instead of installing another version manager.
 
-### Fish
+Portable-tool wrappers accept `--version`, `--upgrade`, `--status`, `--uninstall`,
+and workmux's `--setup`. Old `--install-dir`, `--url` and other installer-specific
+flags are intentionally replaced by native mise configuration. Uninstall removes
+mise-owned versions; it retains declarations, configuration and manually installed
+copies. `--upgrade` follows the declared version; `--version latest` selects latest
+locally. Existing manual binaries may still be on PATH until a new shell activates
+mise. Root rc files load mise through shared `shell/` modules for Bash/Zsh/Fish.
 
-Install `fish` with `devbox setup basic_packages` (apt) or `brew install fish`. The installer installs [starship](https://starship.rs) into `~/.local/bin`, links `config.fish` into `~/.config/fish/` and `starship.toml` (catppuccin-powerline preset) into `~/.config/`, and keeps fish history in `persistent/.fish_history`. Nothing here needs fish to be installed yet, so fish can come before or after `./install`. Starship glyphs need a Nerd Font such as JetBrainsMono Nerd Font in the terminal.
+Devbox-only installation remains available with `bash devbox/install.sh`. It
+registers mise tasks/tools and installs managed shell activation, without deploying
+the rest of the dotfiles. `--uninstall` removes devbox shell blocks/links; it leaves
+the checkout, mise and its registrations for explicit review.
 
-`config.fish` sources `shell/source.fish`, which loads `shell/fish/*.fish` in `NN_` order, mirroring `shell/zsh/*.zshrc` and `shell/common/*.sh`: devbox (with fish completions), aliases, exports, and native fish ports of `shell/common/00_functions.sh`. Node installed with `devbox setup nvm` (`~/.nvm`) is on PATH in fish as well; `nvm` runs the bash nvm and copies its PATH back, so `nvm use` switches node in the current fish too. Machine-local fish overrides go in `~/.persistent/custom.fish` or `~/.persistent/custom/shell/*.fish`.
+## Persistent data
 
-## Customization
+`persistent/` remains ignored mutable storage for agent histories, sessions,
+Downloads, Projects, Workbench and caches. It is not mise dotfile history or sync
+input. Existing regular files/directories at guarded destinations are preserved;
+missing or symlink destinations are linked. Managed Bash/Zsh/Fish rc files get
+`.before-mise.*` backups before replacement. There is no home-wide cleanup step.
 
-Machine-specific or private configuration should live under `persistent/` or `persistent/custom/` instead of being committed directly to shared dotfiles. The default shell entrypoints source shared files from `~/.shell`, while local tool-specific additions can remain in the generated shell startup files.
+Keep your existing persistent directory when trying another checkout. In a fresh
+worktree, before running the installer, you can link its missing `persistent/` to
+your existing persistent directory. Review `./install --dry-run` first: applying
+this branch changes the live shell/editor configuration that HOME points to.

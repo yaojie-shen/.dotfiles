@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Shared adapter for old devbox CLI options; mise owns all installation logic.
+set -euo pipefail
+root="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+name="${1:?tool required}"; shift
+case "$name" in
+  gdu) spec=github:dundee/gdu ;;
+  jless) spec=aqua:PaulJuliusMartinez/jless ;;
+  csvlens) spec=github:YS-L/csvlens ;;
+  lazygit) spec=aqua:jesseduffield/lazygit ;;
+  neovim) spec=aqua:neovim/neovim ;;
+  uv) spec=aqua:astral-sh/uv ;;
+  workmux) spec=github:raine/workmux ;;
+  ollama) spec=aqua:ollama/ollama ;;
+  *) echo "Unknown mise tool: $name" >&2; exit 1 ;;
+esac
+action=install; version=''; setup=0
+while (($#)); do
+  case "$1" in
+    -h|--help)
+      echo "Usage: $name [--version VERSION] [--upgrade|--status|--uninstall] [--setup]"
+      echo 'Mise manages the install directory, verification and PATH.'
+      echo 'Existing manually installed copies are left in place.'
+      exit 0 ;;
+    --version|-v) [[ $# -ge 2 && "$2" != -* && -n "$2" ]] || { echo 'Missing version' >&2; exit 1; }; version="${2#v}"; shift 2 ;;
+    --upgrade) action=upgrade; shift ;;
+    --status) action=status; shift ;;
+    -u|--uninstall) action=uninstall; shift ;;
+    --setup) [[ "$name" == workmux ]] || { echo '--setup is only supported for workmux' >&2; exit 1; }; setup=1; shift ;;
+    *) echo "Unsupported option: $1. Run $name --help for the mise interface." >&2; exit 1 ;;
+  esac
+done
+source "$root/mise/scripts/ensure-mise"
+ensure_mise
+# Queries and uninstall do not register/activate an entire config tree.
+case "$action" in
+  status) exec "$MISE_BIN" -C "$root" ls "$spec" ;;
+  uninstall)
+    # Removes mise-owned versions only. A declaration remains so bootstrap can restore it.
+    exec "$MISE_BIN" -C "$root" uninstall "$spec${version:+@$version}" ;;
+esac
+bash "$root/mise/scripts/register"
+if [[ -n "$version" || "$name" == ollama ]]; then
+  # Explicit version changes are machine-local, never edits to this public checkout.
+  "$MISE_BIN" -C "$HOME" use --path "${XDG_CONFIG_HOME:-$HOME/.config}/mise/config.toml" "$spec@${version:-latest}"
+elif [[ "$action" == upgrade ]]; then
+  "$MISE_BIN" -C "$HOME" upgrade "$spec"
+else
+  "$MISE_BIN" -C "$HOME" install "$spec"
+fi
+if ((setup)); then
+  # Resolve just this installed command; `mise exec` could install unrelated tools.
+  binary="$("$MISE_BIN" -C "$HOME" which workmux)"
+  "$binary" setup --hooks
+fi

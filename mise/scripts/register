@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Register config roots without copying or overwriting the user's mise config.
+set -euo pipefail
+root="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+source "$root/mise/scripts/ensure-mise"
+ensure_mise
+conf="${XDG_CONFIG_HOME:-$HOME/.config}/mise/conf.d"
+mkdir -p "$conf"
+for entry in 50-dotfiles 60-dotfiles-private; do
+  source_dir="$root"
+  if [[ "$entry" == 60-dotfiles-private ]]; then
+    source_dir="${DOTFILES_CUSTOM_ROOT:-$root/persistent/custom}"
+    # Preserve the old top-level persistent config's precedence.
+    [[ ! -f "$root/persistent/mise.toml" ]] || source_dir="$root/persistent"
+  fi
+  target="$conf/$entry"
+  if [[ -e "$target" && ! -L "$target" ]]; then
+    echo "Refusing to replace $target; move it aside first" >&2; exit 1
+  fi
+  marker="${conf%/conf.d}/.dotfiles-registration-$entry"
+  managed=0
+  if [[ -L "$target" && -f "$marker" && ! -L "$marker" ]]; then
+    [[ "$(readlink "$target")" != "$(cat "$marker")" ]] || managed=1
+  fi
+  if [[ ! -f "$source_dir/mise.toml" ]]; then
+    # Remove an obsolete registration only when our record proves ownership.
+    if [[ -L "$target" ]]; then
+      if (( !managed )); then
+        echo "Refusing to remove unowned registration: $target" >&2; exit 1
+      fi
+      rm "$target" "$marker"
+    fi
+    continue
+  fi
+  source_dir="$(cd "$source_dir" && pwd -P)"
+  if [[ -L "$target" && "$(readlink "$target")" != "$source_dir" ]]; then
+    if (( !managed )); then
+      echo "Refusing to replace unowned registration: $target" >&2; exit 1
+    fi
+    rm "$target"
+  fi
+  [[ -L "$target" ]] || ln -s "$source_dir" "$target"
+  marker_temp="$(mktemp "${marker}.XXXXXX")"
+  printf '%s\n' "$source_dir" > "$marker_temp"
+  mv -f "$marker_temp" "$marker"
+  "$MISE_BIN" trust "$source_dir/mise.toml"
+done

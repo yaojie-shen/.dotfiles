@@ -80,6 +80,13 @@ esac
 
 for i in "${!script_names[@]}"; do
   if [[ "${script_names[$i]}" == "$SCRIPT_NAME" ]]; then
+    public_setup="$(cd "$DEVBOX_ROOT/setup" && pwd -P)"
+    public_root="$(cd -P "$DEVBOX_ROOT/.." && pwd -P)"
+    if [[ "${script_paths[$i]%/*}" == "$public_setup" && -f "$public_root/mise.toml" ]]; then
+      source "$public_root/mise/scripts/ensure-mise"
+      ensure_mise
+      exec "$MISE_BIN" -C "$public_root" run "setup:$SCRIPT_NAME" -- "$@"
+    fi
     "${script_paths[$i]}" "$@"
     exit
   fi

@@ -1,0 +1,18 @@
+# kind	target under HOME	source under checkout
+link	.dotfiles	.
+dir	.persistent	persistent
+dir	.codex/sessions	persistent/codex/sessions
+dir	.codex/archived_sessions	persistent/codex/archived_sessions
+file	.codex/history.jsonl	persistent/codex/history.jsonl
+dir	.claude/projects	persistent/claude/projects
+dir	.claude/sessions	persistent/claude/sessions
+dir	.claude/file-history	persistent/claude/file-history
+file	.claude/history.jsonl	persistent/claude/history.jsonl
+link	.claude/settings.json	claude/settings.json
+link	.claude/statusline.js	claude/statusline.js
+dir	Downloads	persistent/Downloads
+dir	Projects	persistent/Projects
+dir	Workbench	persistent/Workbench
+linux-dir	.local/share/autojump	persistent/autojump
+file	.local/share/fish/fish_history	persistent/.fish_history
+link	.config/lazygit/config.yml	config/lazygit/config.yml

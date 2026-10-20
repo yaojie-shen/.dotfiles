@@ -153,8 +153,13 @@ loaded_by_dotfiles() {
 }
 
 install_devbox() {
-  local src shell rc
+  local src shell rc mise_executable
   src="$(resolve_source)"
+  # Tool/setup tasks are now backed by mise; the rest of dotfiles is not applied.
+  source "$src/../mise/scripts/ensure-mise"
+  ensure_mise
+  mise_executable="$(cd "$(dirname "$MISE_BIN")" && pwd -P)/${MISE_BIN##*/}"
+  bash "$src/../mise/scripts/register"
 
   if [[ -L "$DEVBOX_ROOT" || ! -e "$DEVBOX_ROOT" ]]; then
     ln -sfn "$src" "$DEVBOX_ROOT"
@@ -171,8 +176,9 @@ install_devbox() {
       continue
     fi
     configure_rc_block "$rc" "$START_MARKER" "$END_MARKER" "export DEVBOX_ROOT=\"$DEVBOX_ROOT\"
-export PATH=\"\$DEVBOX_ROOT/libexec:\$PATH\"
-eval \"\$(devbox init - $shell)\""
+export PATH=\"\$HOME/.local/bin:\$DEVBOX_ROOT/libexec:\$PATH\"
+eval \"\$(devbox init - $shell)\"
+eval \"\$(\"$mise_executable\" activate $shell)\""
     echo "==> Configured $rc"
   done
 
@@ -183,8 +189,9 @@ eval \"\$(devbox init - $shell)\""
     printf '%s\n' \
       "# Managed by devbox/install.sh" \
       "set -gx DEVBOX_ROOT \"$DEVBOX_ROOT\"" \
-      'set -gx PATH "$DEVBOX_ROOT/libexec" $PATH' \
-      'devbox init - fish | source' >"$FISH_CONF"
+      'set -gx PATH "$HOME/.local/bin" "$DEVBOX_ROOT/libexec" $PATH' \
+      'devbox init - fish | source' \
+      "\"$mise_executable\" activate fish | source" >"$FISH_CONF"
     echo "==> Wrote $FISH_CONF"
   fi
 

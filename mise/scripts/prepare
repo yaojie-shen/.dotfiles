@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+# Existing agent histories/directories remain where they are. Never merge them.
+# Explicitly managed rc files used to be forced by Dotbot. Keep recoverable backups.
+# Other native mise links stop on a real-file conflict for manual review.
+for name in .bashrc .zshrc .config/fish/config.fish .config/starship.toml; do
+  target="$HOME/$name"
+  if [[ -e "$target" && ! -L "$target" ]]; then
+    backup="${target}.before-mise.$(date -u +%Y%m%dT%H%M%SZ).$$"
+    mv "$target" "$backup"
+    echo "Backed up $target -> $backup"
+  fi
+done
+# lazygit creates an empty config on first launch; preserve a nonempty user file.
+target="$HOME/.config/lazygit/config.yml"
+if [[ -f "$target" && ! -s "$target" && ! -L "$target" ]]; then
+  mv "$target" "${target}.before-mise.$(date -u +%Y%m%dT%H%M%SZ).$$"
+fi
+
+bash "$root/mise/scripts/guarded-links"

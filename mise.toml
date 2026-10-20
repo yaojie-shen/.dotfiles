@@ -1,0 +1,182 @@
+min_version = "2026.10.15"
+
+[vars]
+dotfiles_root = "{{config_source | canonicalize | dirname}}"
+
+[env]
+DOTFILES_ROOT = "{{config_source | canonicalize | dirname}}"
+
+[settings]
+# Status/configuration tasks must not install the entire toolbox as a side effect.
+task.run_auto_install = false
+
+# Mise owns versions, downloads, verification, PATH and shims for portable tools.
+# Install only this layer with ./install --only tools.
+[tools]
+"aqua:starship/starship" = "latest"
+"aqua:astral-sh/uv" = "latest"
+"aqua:jesseduffield/lazygit" = "latest"
+"aqua:neovim/neovim" = "latest"
+"aqua:PaulJuliusMartinez/jless" = { version = "0.9.0", os = ["linux/x64", "macos"] }
+"github:YS-L/csvlens" = "0.15.1"
+"github:raine/workmux" = "latest"
+
+[tools."github:dundee/gdu"]
+version = "5.38.0"
+rename_exe = "gdu"
+# The static Linux builds avoid a dependency on the host's glibc version.
+[tools."github:dundee/gdu".platforms]
+linux-x64 = { asset_pattern = "gdu_linux_amd64_static.tgz" }
+linux-arm64 = { asset_pattern = "gdu_linux_arm64.tgz" }
+macos-x64 = { asset_pattern = "gdu_darwin_amd64.tgz" }
+macos-arm64 = { asset_pattern = "gdu_darwin_arm64.tgz" }
+
+[bootstrap.repos]
+"~/.oh-my-zsh" = { url = "https://github.com/ohmyzsh/ohmyzsh.git" }
+"~/.zplug" = { url = "https://github.com/zplug/zplug.git" }
+"~/.bash_it" = { url = "https://github.com/Bash-it/bash-it.git" }
+
+[bootstrap.hooks]
+post-repos = 'bash "{{vars.dotfiles_root}}/mise/scripts/shell-frameworks"'
+pre-dotfiles = 'bash "{{vars.dotfiles_root}}/mise/scripts/prepare"'
+
+[dotfiles]
+"~/.bashrc" = "bashrc"
+"~/.zshrc" = "zshrc"
+"~/.condarc" = "condarc"
+"~/.tmux.conf" = "tmux.conf"
+"~/.tmux/catppuccin.conf" = "tmux/catppuccin.conf"
+"~/.tmux/scripts" = "tmux/scripts"
+"~/.config/workmux/config.yaml" = "config/workmux/config.yaml"
+"~/.config/uv/uv.toml" = "config/uv/uv.toml"
+"~/.shell" = "shell"
+"~/.devbox" = "devbox"
+"~/.config/nvim" = "nvim"
+"~/.config/fish/config.fish" = "config.fish"
+"~/.config/starship.toml" = "starship.toml"
+
+[tasks.dotfiles]
+dir = "{{vars.dotfiles_root}}"
+description = "Deploy configuration and guarded persistent links"
+run = 'bash install --only dotfiles'
+
+[tasks.preview]
+dir = "{{vars.dotfiles_root}}"
+description = "Preview the full machine bootstrap"
+run = 'bash install --dry-run'
+
+[tasks.status]
+dir = "{{vars.dotfiles_root}}"
+description = "Show declared tools and configuration state"
+run = ['"{{mise_bin}}" -C "$HOME" ls', '"{{mise_bin}}" -C "$HOME" dot status']
+
+[tasks."setup:basic_packages"]
+dir = "{{vars.dotfiles_root}}"
+description = "Install system packages for the current package manager"
+run = '"{{mise_bin}}" -E system bootstrap --only packages --yes'
+
+[tasks."setup:ollama"]
+dir = "{{vars.dotfiles_root}}"
+description = "Install Ollama with mise (server startup remains explicit)"
+run = 'bash mise/scripts/tool ollama'
+
+[tasks."setup:autojump"]
+dir = "{{vars.dotfiles_root}}"
+run = 'bash devbox/setup/autojump'
+
+[tasks."setup:chatgpt_cli"]
+dir = "{{vars.dotfiles_root}}"
+run = 'bash devbox/setup/chatgpt_cli'
+
+[tasks."setup:claude"]
+dir = "{{vars.dotfiles_root}}"
+run = 'bash devbox/setup/claude'
+
+[tasks."setup:codex"]
+dir = "{{vars.dotfiles_root}}"
+run = 'bash devbox/setup/codex'
+
+[tasks."setup:codex_cli"]
+dir = "{{vars.dotfiles_root}}"
+run = 'bash devbox/setup/codex_cli'
+
+[tasks."setup:conda"]
+dir = "{{vars.dotfiles_root}}"
+run = 'bash devbox/setup/conda'
+
+[tasks."setup:csvlens"]
+dir = "{{vars.dotfiles_root}}"
+run = 'bash devbox/setup/csvlens'
+
+[tasks."setup:gdu"]
+dir = "{{vars.dotfiles_root}}"
+run = 'bash devbox/setup/gdu'
+
+[tasks."setup:homebrew"]
+dir = "{{vars.dotfiles_root}}"
+run = 'bash devbox/setup/homebrew'
+
+[tasks."setup:jless"]
+dir = "{{vars.dotfiles_root}}"
+run = 'bash devbox/setup/jless'
+
+[tasks."setup:lazygit"]
+dir = "{{vars.dotfiles_root}}"
+run = 'bash devbox/setup/lazygit'
+
+[tasks."setup:neovim"]
+dir = "{{vars.dotfiles_root}}"
+run = 'bash devbox/setup/neovim'
+
+[tasks."setup:nvm"]
+dir = "{{vars.dotfiles_root}}"
+run = 'bash devbox/setup/nvm'
+
+[tasks."setup:pyenv"]
+dir = "{{vars.dotfiles_root}}"
+run = 'bash devbox/setup/pyenv'
+
+[tasks."setup:pytorch_conda"]
+dir = "{{vars.dotfiles_root}}"
+run = 'bash devbox/setup/pytorch_conda'
+
+[tasks."setup:shell_fallback"]
+dir = "{{vars.dotfiles_root}}"
+run = 'bash devbox/setup/shell_fallback'
+
+[tasks."setup:skills"]
+dir = "{{vars.dotfiles_root}}"
+run = 'bash devbox/setup/skills'
+
+[tasks."setup:snipkit"]
+dir = "{{vars.dotfiles_root}}"
+run = 'bash devbox/setup/snipkit'
+
+[tasks."setup:ssh_public_key"]
+dir = "{{vars.dotfiles_root}}"
+run = 'bash devbox/setup/ssh_public_key'
+
+[tasks."setup:ssh_server"]
+dir = "{{vars.dotfiles_root}}"
+run = 'bash devbox/setup/ssh_server'
+
+[tasks."setup:tmux"]
+dir = "{{vars.dotfiles_root}}"
+run = 'bash devbox/setup/tmux'
+
+[tasks."setup:uv"]
+dir = "{{vars.dotfiles_root}}"
+run = 'bash devbox/setup/uv'
+
+[tasks."setup:vscode_tunnel"]
+dir = "{{vars.dotfiles_root}}"
+run = 'bash devbox/setup/vscode_tunnel'
+
+[tasks."setup:workmux"]
+dir = "{{vars.dotfiles_root}}"
+run = 'bash devbox/setup/workmux'
+
+[tasks.setup]
+dir = "{{vars.dotfiles_root}}"
+description = "Find and run public/private setups (public first; DEVBOX_SETUP_PATH overrides)"
+run = 'bash devbox/libexec/devbox setup'
