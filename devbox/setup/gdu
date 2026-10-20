@@ -1,0 +1,203 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+ACTION="install"
+GDU_VERSION="${GDU_VERSION:-latest}"
+INSTALL_DIR="${GDU_INSTALL_DIR:-${HOME}/.local/bin}"
+TMP_DIR=""
+STAGED_BIN=""
+
+_devbox_setup_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ ! -f "$_devbox_setup_dir/../lib/import.bash" ]]; then
+  printf '%s\n' "Error: Devbox importer not found: $_devbox_setup_dir/../lib/import.bash" >&2
+  exit 1
+fi
+# shellcheck disable=SC1090
+source "$_devbox_setup_dir/../lib/import.bash"
+import output platform
+unset _devbox_setup_dir
+
+cleanup() {
+  [[ -z "$TMP_DIR" ]] || rm -rf -- "$TMP_DIR"
+  [[ -z "$STAGED_BIN" ]] || rm -f -- "$STAGED_BIN"
+}
+trap cleanup EXIT
+
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") [options]
+
+Install gdu, an interactive disk usage analyzer with parallel scanning.
+
+Behavior:
+  - Downloads official prebuilt binaries for Linux/macOS (amd64/arm64).
+  - Uses the static binary on Linux amd64; no Homebrew or compilation needed.
+  - Verifies the archive against the release's sha256sums.txt before installing.
+  - Leaves ~/.gdu.yaml, scan databases, and shell configuration unchanged.
+
+Options:
+  -h, --help              Show this help message
+  -u, --uninstall         Remove gdu from the selected install directory
+  --upgrade               Download and install again even if gdu already exists
+  --status                Show installed version and command location
+  --version <VERSION>     Install a specific release (default: latest)
+  --install-dir <DIR>     Install directory (default: ~/.local/bin)
+
+Examples:
+  devbox setup gdu
+  devbox setup gdu --upgrade
+  devbox setup gdu --version 5.38.0
+  gdu --no-delete --max-cores 16 /path/to/scan
+EOF
+}
+
+require_value() {
+  if [[ -z "${2:-}" || "$2" == -* ]]; then
+    error "Missing value for $1"
+    return 1
+  fi
+}
+
+release_binary() {
+  local os arch
+  os="$(detect_os)"
+  arch="$(detect_arch)"
+  case "$os/$arch" in
+  linux/x86_64) printf 'gdu_linux_amd64_static\n' ;;
+  linux/arm64) printf 'gdu_linux_arm64\n' ;;
+  macos/x86_64) printf 'gdu_darwin_amd64\n' ;;
+  macos/arm64) printf 'gdu_darwin_arm64\n' ;;
+  *) error "Unsupported platform: $os/$arch"; return 1 ;;
+  esac
+}
+
+checksum() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
+check_requirements() {
+  local missing=() cmd
+  for cmd in curl tar install mktemp; do
+    command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
+  done
+  if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+    missing+=("sha256sum-or-shasum")
+  fi
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    error "Missing required commands: ${missing[*]}"
+    return 1
+  fi
+}
+
+install_gdu() {
+  local bin_path="${INSTALL_DIR%/}/gdu"
+  local binary archive release_url expected actual installed_version
+  binary="$(release_binary)"
+  if [[ -d "$bin_path" ]]; then
+    error "Install destination is a directory: $bin_path"
+    return 1
+  fi
+  if [[ -x "$bin_path" && "$ACTION" != upgrade ]]; then
+    if [[ "$GDU_VERSION" == latest ]]; then
+      success "gdu is already installed: $bin_path (use --upgrade to update)"
+      return 0
+    fi
+    installed_version="$("$bin_path" --version | sed -n 's/^Version:[[:space:]]*v\([^[:space:]]*\).*/\1/p')"
+    if [[ "$installed_version" == "${GDU_VERSION#v}" ]]; then
+      success "gdu $installed_version is already installed: $bin_path"
+      return 0
+    fi
+  fi
+  check_requirements
+  if [[ "$GDU_VERSION" == latest ]]; then
+    release_url="https://github.com/dundee/gdu/releases/latest/download"
+  else
+    release_url="https://github.com/dundee/gdu/releases/download/v${GDU_VERSION#v}"
+  fi
+  archive="${binary}.tgz"
+  TMP_DIR="$(mktemp -d)"
+  info "Downloading gdu $GDU_VERSION ($binary)..."
+  curl -fsSL --retry 3 --connect-timeout 10 --max-time 180 \
+    "$release_url/$archive" -o "$TMP_DIR/$archive"
+  curl -fsSL --retry 3 --connect-timeout 10 --max-time 30 \
+    "$release_url/sha256sums.txt" -o "$TMP_DIR/sha256sums.txt"
+  expected="$(awk -v name="$archive" '$2 == name || $2 == "*" name {print $1; exit}' "$TMP_DIR/sha256sums.txt")"
+  actual="$(checksum "$TMP_DIR/$archive")"
+  if [[ ! "$expected" =~ ^[[:xdigit:]]{64}$ || "$actual" != "$expected" ]]; then
+    error "gdu SHA-256 verification failed for $archive; existing installation was left unchanged"
+    return 1
+  fi
+  # Read just the expected member; never unpack arbitrary archive paths.
+  tar -xOzf "$TMP_DIR/$archive" "$binary" >"$TMP_DIR/gdu"
+  chmod +x "$TMP_DIR/gdu"
+  "$TMP_DIR/gdu" --version
+
+  # Stage in the destination filesystem so replacement is atomic.
+  mkdir -p -- "$INSTALL_DIR"
+  STAGED_BIN="$(mktemp "${INSTALL_DIR%/}/.gdu.XXXXXX")"
+  command install -m 0755 "$TMP_DIR/gdu" "$STAGED_BIN"
+  mv -f -- "$STAGED_BIN" "$bin_path"
+  STAGED_BIN=""
+  success "gdu installed: $bin_path"
+}
+
+uninstall() {
+  local bin_path="${INSTALL_DIR%/}/gdu"
+  if [[ -d "$bin_path" ]]; then
+    error "Refusing to remove a directory: $bin_path"
+    return 1
+  fi
+  if [[ ! -e "$bin_path" && ! -L "$bin_path" ]]; then
+    warning "gdu is not installed at $bin_path"
+    return 0
+  fi
+  rm -f -- "$bin_path"
+  success "gdu uninstalled: $bin_path"
+}
+
+status() {
+  local bin_path="${INSTALL_DIR%/}/gdu" resolved
+  resolved="$(command -v gdu || true)"
+  printf '  install path: %s\n' "$bin_path"
+  printf '  PATH command: %s\n' "${resolved:-not found}"
+  if [[ -x "$bin_path" ]]; then
+    "$bin_path" --version
+  else
+    printf '  not installed at selected path\n'
+  fi
+  if [[ -n "$resolved" && -x "$bin_path" && ! "$resolved" -ef "$bin_path" ]]; then
+    warning "PATH resolves to a different gdu installation"
+  fi
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+  -h | --help) usage; exit 0 ;;
+  -u | --uninstall) ACTION="uninstall"; shift ;;
+  --upgrade) ACTION="upgrade"; shift ;;
+  --status) ACTION="status"; shift ;;
+  --version) require_value "$1" "${2:-}"; GDU_VERSION="$2"; shift 2 ;;
+  --install-dir) require_value "$1" "${2:-}"; INSTALL_DIR="$2"; shift 2 ;;
+  *) error "Unknown option: $1"; usage >&2; exit 1 ;;
+  esac
+done
+
+if [[ "$GDU_VERSION" != latest && ! "$GDU_VERSION" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+([-+][[:alnum:].-]+)?$ ]]; then
+  error "Invalid release version: $GDU_VERSION"
+  exit 1
+fi
+if [[ -z "$INSTALL_DIR" ]]; then
+  error "Install directory must not be empty"
+  exit 1
+fi
+
+case "$ACTION" in
+install | upgrade) install_gdu ;;
+uninstall) uninstall ;;
+status) status ;;
+esac
