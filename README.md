@@ -55,6 +55,19 @@ devbox setup neovim
 devbox setup pyenv
 ```
 
+Account switchers are available in the shared setup collection:
+
+```bash
+devbox setup codex_auth   # npm install -g @loongphy/codex-auth
+devbox setup claude_swap  # uv tool install --upgrade claude-swap
+```
+
+`codex_auth` requires npm (and loads nvm from `~/.nvm` if needed).
+`claude_swap` requires uv; install it with `devbox setup uv` first.
+Re-run either setup to update, or pass `--status` to inspect its installation.
+They install `codex-auth` and `cswap` / `claude-swap`, respectively, and leave
+saved accounts and shell startup files untouched.
+
 To install only `devbox`, without the rest of the dotfiles, run `devbox/install.sh` from a checkout, or:
 
 ```bash
