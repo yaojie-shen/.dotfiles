@@ -125,17 +125,20 @@ function pacePart(data) {
   return DIM + `⚡ ${remainingPct}% left at reset` + RESET;
 }
 
-// Context-window usage segment, in the same drain style as the rate-limit
-// windows: the bar shows what is left, and color warns off percent used.
-// There is no reset time here, since context does not refill on a timer
-// the way a rate-limit window does.
+// Current input tokens, including cache reads/writes but excluding output.
+// Show usage only: model-window percentages do not predict auto-compaction.
 function ctxPart(data) {
-  const cw = data && data.context_window;
-  if (!cw || cw.used_percentage == null || cw.remaining_percentage == null) return null;
-  const pct = Math.round(cw.used_percentage);
-  const rem = Math.round(cw.remaining_percentage);
-  const c = warnColor(pct);
-  return DIM + 'ctx ' + RESET + bar(rem, c) + ' ' + c + `${rem}%` + RESET;
+  const usage = data && data.context_window && data.context_window.current_usage;
+  const values = usage && [usage.input_tokens, usage.cache_creation_input_tokens,
+    usage.cache_read_input_tokens];
+  let text = '--';
+  if (values && values.every((v) => typeof v === 'number' && Number.isFinite(v) && v >= 0)) {
+    const total = values.reduce((a, b) => a + b, 0);
+    if (Number.isFinite(total)) {
+      text = total < 1000 ? String(total) : `${(total / 1000).toFixed(1).replace(/\.0$/, '')}k`;
+    }
+  }
+  return DIM + 'ctx ' + RESET + text;
 }
 
 // Model name, with the reasoning effort level appended dim when present
