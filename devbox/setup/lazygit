@@ -3,6 +3,8 @@
 set -Eeuo pipefail
 
 ACTION="install"
+WITH_DELTA=1
+DELTA_VERSION="0.20.1"
 LAZYGIT_VERSION="${LAZYGIT_VERSION:-latest}"
 INSTALL_DIR="${LAZYGIT_INSTALL_DIR:-${HOME}/.local/bin}"
 INSTALL_DIR_SET="${LAZYGIT_INSTALL_DIR:+yes}"
@@ -32,12 +34,14 @@ Install lazygit, a terminal UI for git.
 Behavior:
   - macOS: manages lazygit exclusively through an existing Homebrew installation.
   - Linux: downloads the official prebuilt binary and verifies its SHA-256 checksum.
-  - Leaves ~/.config/lazygit untouched on uninstall.
+  - Optionally installs delta for side-by-side diffs; failure is non-fatal.
+  - Leaves delta and ~/.config/lazygit untouched on uninstall.
 
 Options:
   -h, --help              Show this help message
   -u, --uninstall         Uninstall lazygit using the platform's install method
-  --upgrade               Upgrade via Homebrew, or reinstall the Linux binary
+  --upgrade               Upgrade lazygit and refresh the bundled delta version
+  --without-delta         Skip the optional delta installation
   --version <VERSION>     Linux only: specific release (default: latest)
   --install-dir <DIR>     Linux only: install directory (default: $INSTALL_DIR)
 
@@ -240,6 +244,65 @@ install() {
   success "lazygit installed successfully: $bin_path"
 }
 
+# Keep delta optional: every failing step returns to the warning-only caller.
+install_delta() (
+  local target expected archive version_dir delta_tmp actual
+  local delta_bin="${INSTALL_DIR%/}/delta"
+  if [[ "$(detect_os)" == "macos" ]]; then
+    local brew_cmd
+    brew_cmd="$(command -v brew || true)"
+    [[ -n "$brew_cmd" ]] || brew_cmd="/opt/homebrew/bin/brew"
+    [[ -x "$brew_cmd" ]] || brew_cmd="/usr/local/bin/brew"
+    if "$brew_cmd" list --formula git-delta >/dev/null 2>&1; then
+      [[ "$ACTION" != "upgrade" ]] || "$brew_cmd" upgrade --formula git-delta || return 1
+    else
+      "$brew_cmd" install --formula git-delta || return 1
+    fi
+    return 0
+  fi
+  if [[ "$ACTION" != "upgrade" ]]; then
+    if [[ -x "$delta_bin" ]] && "$delta_bin" --version >/dev/null 2>&1; then
+      success "delta is already installed: $delta_bin"
+      return 0
+    fi
+    if command -v delta >/dev/null 2>&1 && delta --version >/dev/null 2>&1; then
+      success "delta is already available on PATH"
+      return 0
+    fi
+  fi
+  case "$(detect_arch)" in
+    x86_64)
+      target=x86_64-unknown-linux-musl
+      expected=69dcb4043f55c29118f408c6efd30115e0a4e0a6709253343b8c8fa814ab4a31
+      ;;
+    arm64)
+      target=aarch64-unknown-linux-gnu
+      expected=da7f4338f593572ff426ae153e0870e2fdc72729416eff551b40cdeb67940db8
+      ;;
+    *) return 1 ;;
+  esac
+  check_requirements || return 1
+  delta_tmp="$(mktemp -d)" || return 1
+  trap 'rm -rf "$delta_tmp"' EXIT
+  version_dir="delta-${DELTA_VERSION}-${target}"
+  archive="${version_dir}.tar.gz"
+  info "Installing optional delta ${DELTA_VERSION} for ${target}..."
+  curl -fsSL --retry 2 --connect-timeout 10 --max-time 120 \
+    "https://github.com/dandavison/delta/releases/download/${DELTA_VERSION}/${archive}" \
+    -o "$delta_tmp/$archive" || return 1
+  actual="$(checksum "$delta_tmp/$archive")" || return 1
+  if [[ "$actual" != "$expected" ]]; then
+    error "delta checksum verification failed"
+    return 1
+  fi
+  tar -xzf "$delta_tmp/$archive" -C "$delta_tmp" "$version_dir/delta" || return 1
+  chmod +x "$delta_tmp/$version_dir/delta" || return 1
+  "$delta_tmp/$version_dir/delta" --version || return 1
+  mkdir -p "$INSTALL_DIR" || return 1
+  mv -f "$delta_tmp/$version_dir/delta" "$delta_bin" || return 1
+  success "Optional delta installed: $delta_bin"
+)
+
 uninstall() {
   local bin_path="${INSTALL_DIR%/}/lazygit"
 
@@ -267,6 +330,10 @@ while [[ $# -gt 0 ]]; do
     ACTION="upgrade"
     shift
     ;;
+  --without-delta)
+    WITH_DELTA=0
+    shift
+    ;;
   --version)
     require_value "$1" "${2:-}"
     LAZYGIT_VERSION="$2"
@@ -289,10 +356,15 @@ done
 os="$(detect_os)"
 if [[ "$os" == "macos" ]]; then
   manage_homebrew
-  exit 0
+else
+  case "$ACTION" in
+    uninstall) uninstall ;;
+    *) install ;;
+  esac
 fi
 
-case "$ACTION" in
-uninstall) uninstall ;;
-*) install ;;
-esac
+if [[ "$ACTION" != "uninstall" && "$WITH_DELTA" == 1 ]]; then
+  if ! install_delta; then
+    warning "Optional delta installation failed; lazygit is ready to use with its normal diff."
+  fi
+fi

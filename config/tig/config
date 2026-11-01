@@ -1,0 +1,34 @@
+# Branch-focused overview. Open with `tig refs`; press r from other views.
+# B: local branches and upstream divergence; U: current status; M: remote URLs.
+set refs-view = ref:yes,width=36 id:yes,width=8 date:relative-compact commit-title:yes
+set main-view = id:yes,width=8 date:relative-compact commit-title:yes,graph,refs,overflow=no
+set main-options = --all
+set reference-format = [branch] <remote> {tracked-remote} (tag)
+
+# Keep the terminal background; distinguish local, remote and current refs.
+color main-head cyan default bold
+color main-ref green default
+color main-remote yellow default
+color main-tracked yellow default bold
+color main-tag magenta default
+color main-local-tag magenta default
+color cursor black cyan bold
+color title-focus white blue bold
+color title-blur default default
+
+# Unicode graph uses rounded corners; `devbox setup tig` adds larger nodes.
+set line-graphics = utf-8
+set truncation-delimiter = utf-8
+set horizontal-scroll = 20%
+set vertical-split = auto
+set split-view-height = 70%
+set split-view-width = 60%
+set tab-size = 4
+set diff-context = 5
+set wrap-lines = no
+
+# Inspection only. Remote-tracking refs reflect the most recent fetch.
+bind generic B !git branch -vv
+bind generic U !git status --short --branch
+bind generic M !git remote -v
+bind generic V :toggle vertical-split

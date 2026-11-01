@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Build against system libraries and keep the system tig available as fallback.
+VERSION=2.5.5
+ARCHIVE_SHA256=24ba2c8beae889e6002ea7ced0e29851dee57c27fde8480fb9c64d5eb8765313
+PREFIX="${HOME}/.local"
+
+usage() {
+  printf '%s\n' \
+    'Usage: devbox setup tig [--help | --status]' \
+    'Build tig 2.5.5 with rounded Unicode lines, ● commits and ◆ merges.' \
+    'Installs ~/.local/bin/tig; requires a C compiler, make and ncurses headers.'
+}
+
+case "${1:-}" in
+  -h|--help) usage; exit 0 ;;
+  --status)
+    if [[ -x "$PREFIX/bin/tig" ]]; then "$PREFIX/bin/tig" --version; fi
+    command -v tig || true
+    exit 0
+    ;;
+  '') ;;
+  *) usage >&2; exit 2 ;;
+esac
+[[ $# -le 1 ]] || { usage >&2; exit 2; }
+
+for tool in curl tar sha256sum python3 gcc make; do
+  command -v "$tool" >/dev/null || { printf 'Missing dependency: %s\n' "$tool" >&2; exit 1; }
+done
+
+BUILD_DIR="$(mktemp -d)"
+trap 'rm -rf -- "$BUILD_DIR"' EXIT
+curl -fsSL --retry 2 \
+  "https://github.com/jonas/tig/releases/download/tig-$VERSION/tig-$VERSION.tar.gz" \
+  -o "$BUILD_DIR/tig.tar.gz"
+printf '%s  %s\n' "$ARCHIVE_SHA256" "$BUILD_DIR/tig.tar.gz" | sha256sum -c -
+tar -xzf "$BUILD_DIR/tig.tar.gz" -C "$BUILD_DIR"
+
+python3 - "$BUILD_DIR/tig-$VERSION" <<'PY'
+import pathlib
+import sys
+
+for name in ("graph-v1.c", "graph-v2.c"):
+    path = pathlib.Path(sys.argv[1]) / "src" / name
+    source = path.read_text()
+    old = 'else if (symbol->merge)\n\t\t\treturn " ●";\n\t\treturn " ∙";'
+    new = 'else if (symbol->merge)\n\t\t\treturn " ◆";\n\t\treturn " ●";'
+    if source.count(old) != 1:
+        raise SystemExit(f"Unexpected graph implementation in {name}")
+    path.write_text(source.replace(old, new))
+PY
+
+# Avoid Homebrew build tools and libraries on Linux hosts.
+if [[ "$(uname -s)" == Linux ]]; then
+  export PATH="/usr/bin:/bin:$PATH"
+  unset PKG_CONFIG_PATH
+fi
+cd "$BUILD_DIR/tig-$VERSION"
+./configure --prefix="$PREFIX" CC=gcc
+make -j2
+mkdir -p "$PREFIX/bin"
+install -m 755 src/tig "$PREFIX/bin/.tig-rounded-new"
+mv -f "$PREFIX/bin/.tig-rounded-new" "$PREFIX/bin/tig"
+printf 'Installed %s/bin/tig with ● commits, ◆ merges and rounded lines.\n' "$PREFIX"

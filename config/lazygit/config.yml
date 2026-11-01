@@ -1,24 +1,56 @@
+# Skip first-launch informational dialogs, not destructive-action confirmations.
+disableStartupPopups: true
+
 gui:
   # Status panel shows the all-branches graph instead of the splash screen
   statusPanelView: allBranchesLog
-  # Branches panel: show ahead/behind against main, not only against upstream
-  showDivergenceFromBaseBranch: arrowAndNumber
-  sidePanelWidth: 0.4
+  # Keep upstream ahead/behind distinct from divergence against the base branch.
+  showDivergenceFromBaseBranch: none
+  showBranchCommitHash: true
+  commitHashLength: 8
+  commitAuthorShortLength: 8
+  commitAuthorLongLength: 12
+  timeFormat: '2006-01-02'
+  shortTimeFormat: '15:04'
+  sidePanelWidth: 0.45
   expandFocusedSidePanel: true
+  expandedSidePanelWeight: 3
+  shrinkSidePanelsToContent: true
+  # Press + in Commits: full-width list above the patch, with native refs visible.
+  enlargedSideViewLocation: top
   showRandomTip: false
-
+  border: rounded
+  showListFooter: true
+  showBottomLine: true
+  showPanelJumps: true
+  showCommandLog: false
+  commandLogSize: 3
+  filterMode: fuzzy
+  theme:
+    activeBorderColor: [cyan, bold]
+    inactiveBorderColor: [default]
+    searchingActiveBorderColor: [yellow, bold]
+    optionsTextColor: [cyan]
+    selectedLineBgColor: ['#334155']
+    inactiveViewSelectedLineBgColor: [bold]
 # Repos live on NFS, which stalls intermittently. Each auto-fetch triggers a UI-blocking
 # refresh, so fetch less often (press `f` in the files panel to fetch on demand).
 refresher:
   refreshInterval: 30 # default 10
   fetchInterval: 300 # default 60
-
 git:
+  diffRenderers:
+    # A missing or incompatible delta must not prevent viewing diffs.
+    - colorArg: always
+      command: "sh -c 'if command -v delta >/dev/null 2>&1 && delta --version >/dev/null 2>&1; then exec delta --dark --side-by-side --paging=never; else exec cat; fi'"
+    # Plain diff remains selectable even with delta installed.
+    - colorArg: always
+      type: rawGit
   log:
     # Commits panel draws every branch (like `git log --all`), keeping lazygit's colored graph
     showWholeGraph: true
-  # Refs and subject first, then hash/author/date. Refs: HEAD cyan, local bold green, remote plain red.
-  branchLogCmd: git -c color.decorate.HEAD='bold cyan' -c color.decorate.branch='bold green' -c color.decorate.remoteBranch=red log --graph --color=always --decorate-refs-exclude='refs/remotes/*/HEAD' --pretty=format:'%C(auto)%d%C(reset) %s  %C(yellow)%h%C(reset) %C(blue)%an%C(reset) %C(dim)%ar%C(reset)' {{branchName}} --
+  # Refs and subject first, then hash/author/date. Remote refs use yellow rather than error-like red.
+  branchLogCmd: git -c color.decorate.HEAD='bold cyan' -c color.decorate.branch='bold green' -c color.decorate.remoteBranch=yellow log --graph --color=always --decorate-refs-exclude='refs/remotes/*/HEAD' --pretty=format:'%C(auto)%d%C(reset) %s  %C(yellow)%h%C(reset) %C(blue)%an%C(reset) %C(dim)%ar%C(reset)' {{branchName}} --
   allBranchesLogCmds:
-    - git -c color.decorate.HEAD='bold cyan' -c color.decorate.branch='bold green' -c color.decorate.remoteBranch=red log --graph --color=always --exclude=refs/stash --all --decorate-refs-exclude='refs/remotes/*/HEAD' --pretty=format:'%C(auto)%d%C(reset) %s  %C(yellow)%h%C(reset) %C(blue)%an%C(reset) %C(dim)%ar%C(reset)'
+    - git -c color.decorate.HEAD='bold cyan' -c color.decorate.branch='bold green' -c color.decorate.remoteBranch=yellow log --graph --color=always --exclude=refs/stash --all --decorate-refs-exclude='refs/remotes/*/HEAD' --pretty=format:'%C(auto)%d%C(reset) %s  %C(yellow)%h%C(reset) %C(blue)%an%C(reset) %C(dim)%ar%C(reset)'
     - git log --graph --all --color=always --abbrev-commit --decorate --date=relative --pretty=medium
