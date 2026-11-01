@@ -5,7 +5,9 @@
 
 - shell:
     - command: |
-        if [ -s "$HOME/.oh-my-zsh/oh-my-zsh.sh" ]; then
+        if ! command -v zsh >/dev/null 2>&1; then
+          printf 'Zsh is not installed; skipping Oh-My-Zsh. Bash setup will continue.\n'
+        elif [ -s "$HOME/.oh-my-zsh/oh-my-zsh.sh" ]; then
           printf 'Oh-My-Zsh already installed at %s, skipping.\n' "$HOME/.oh-my-zsh"
         elif [ -e "$HOME/.oh-my-zsh" ]; then
           printf 'Warning: %s exists but does not look like a complete Oh-My-Zsh install. Please repair or remove it before rerunning install.\n' "$HOME/.oh-my-zsh" >&2
@@ -16,7 +18,9 @@
       description: ">>> Oh-My-Zsh"
       quiet: true
     - command: |
-        if [ -s "$HOME/.zplug/init.zsh" ]; then
+        if ! command -v zsh >/dev/null 2>&1; then
+          printf 'Zsh is not installed; skipping Zplug. Bash setup will continue.\n'
+        elif [ -s "$HOME/.zplug/init.zsh" ]; then
           printf 'Zplug already installed at %s, skipping.\n' "$HOME/.zplug"
         elif [ -e "$HOME/.zplug" ]; then
           printf 'Warning: %s exists but does not look like a complete Zplug install. Please repair or remove it before rerunning install.\n' "$HOME/.zplug" >&2

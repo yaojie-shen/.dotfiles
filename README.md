@@ -23,7 +23,9 @@ cd ~/.dotfiles
 ./install
 ```
 
-The installer updates the Dotbot submodule, pulls the latest repository changes, and applies `install.conf.yaml`. It links files such as `~/.zshrc`, `~/.bashrc`, `~/.tmux.conf`, `~/.condarc`, `~/.config/nvim`, `~/.shell`, and `~/.devbox`.
+The installer initializes the Dotbot submodule and applies `install.conf.yaml`. Pass `--update` to also pull the latest repository and custom changes. It links files such as `~/.zshrc`, `~/.bashrc`, `~/.tmux.conf`, `~/.condarc`, `~/.config/nvim`, `~/.shell`, and `~/.devbox`.
+
+Installation runs with Bash; Zsh is optional. On a fresh machine, Bash, Git, Python 3.6+ (for Dotbot), and curl are required. Without Zsh, the installer skips Oh-My-Zsh and Zplug and continues with the Bash configuration. If you install Zsh later, rerun `bash ./install` to install those plugins. There is no need to switch your login shell.
 
 If present, an additional private Dotbot config is also applied from either:
 
@@ -35,9 +37,9 @@ If present, an additional private Dotbot config is also applied from either:
 After installation, open a new shell or source your shell config:
 
 ```bash
-source ~/.zshrc
-# or
 source ~/.bashrc
+# or, if you use Zsh
+source ~/.zshrc
 ```
 
 Use `devbox` to list and run setup scripts:
