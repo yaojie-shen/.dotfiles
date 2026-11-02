@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+#
+# Install or update claude-swap (https://github.com/realiti4/claude-swap), a CLI
+# for switching Claude Code accounts (commands: cswap, claude-swap), as a uv
+# tool. uv lives in ~/.local/bin, which non-interactive bash may not have on
+# PATH. Saved accounts stay per machine and are never synced.
+
+set -Eeuo pipefail
+
+ACTION="install"
+
+_devbox_setup_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ ! -f "$_devbox_setup_dir/../lib/import.bash" ]]; then
+  printf '%s\n' "Error: Devbox importer not found: $_devbox_setup_dir/../lib/import.bash" >&2
+  exit 1
+fi
+# shellcheck disable=SC1090
+source "$_devbox_setup_dir/../lib/import.bash"
+import output
+unset _devbox_setup_dir
+
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") [options]
+
+Behavior:
+  - Installs or upgrades claude-swap with uv tool install --upgrade.
+
+Options:
+  -h, --help     Show this help message
+  --status       Show detected claude-swap install state
+
+Examples:
+  $(basename "$0")
+  $(basename "$0") --status
+EOF
+  exit 0
+}
+
+PATH="$HOME/.local/bin:$PATH"
+
+status() {
+  local path
+  path="$(command -v cswap 2>/dev/null || true)"
+
+  info "claude-swap status"
+  printf '  command on PATH: %s\n' "${path:-not found}"
+  if command -v uv >/dev/null 2>&1; then
+    printf '  uv tool:         %s\n' "$(uv tool list 2>/dev/null | grep '^claude-swap ' || echo "not installed")"
+  fi
+}
+
+install_claude_swap() {
+  command -v uv >/dev/null 2>&1 || {
+    error "uv not found; run 'devbox setup uv' first"
+    return 1
+  }
+
+  info "Installing claude-swap"
+  uv tool install --upgrade claude-swap
+
+  printf '\n'
+  status
+  printf '\n'
+  success "claude-swap setup complete"
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+  -h | --help)
+    usage
+    ;;
+  --status)
+    ACTION="status"
+    shift
+    ;;
+  *)
+    error "Unknown option: $1"
+    exit 1
+    ;;
+  esac
+done
+
+case "$ACTION" in
+install)
+  install_claude_swap
+  ;;
+status)
+  status
+  ;;
+esac

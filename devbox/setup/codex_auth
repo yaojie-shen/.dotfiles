@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+#
+# Install or update codex-auth (https://github.com/Loongphy/codex-auth), a CLI for
+# switching Codex accounts, as a global npm package. npm comes from nvm's node
+# (~/.nvm), which non-interactive bash does not load, so nvm's default version is
+# activated here. Saved accounts stay per machine and are never synced.
+
+set -Eeuo pipefail
+
+ACTION="install"
+PACKAGE="@loongphy/codex-auth"
+
+_devbox_setup_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ ! -f "$_devbox_setup_dir/../lib/import.bash" ]]; then
+  printf '%s\n' "Error: Devbox importer not found: $_devbox_setup_dir/../lib/import.bash" >&2
+  exit 1
+fi
+# shellcheck disable=SC1090
+source "$_devbox_setup_dir/../lib/import.bash"
+import output
+unset _devbox_setup_dir
+
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") [options]
+
+Behavior:
+  - Installs or updates $PACKAGE with npm install -g.
+  - Uses nvm's default node (~/.nvm) when npm is not already on PATH.
+
+Options:
+  -h, --help     Show this help message
+  --status       Show detected codex-auth install state
+
+Examples:
+  $(basename "$0")
+  $(basename "$0") --status
+EOF
+  exit 0
+}
+
+if ! command -v npm >/dev/null 2>&1 && [[ -s "${NVM_DIR:-$HOME/.nvm}/nvm.sh" ]]; then
+  set +u
+  # shellcheck disable=SC1091
+  . "${NVM_DIR:-$HOME/.nvm}/nvm.sh" || true  # returns non-zero when no default is set
+  set -u
+fi
+
+status() {
+  local path
+  path="$(command -v codex-auth 2>/dev/null || true)"
+
+  info "codex-auth status"
+  printf '  command on PATH: %s\n' "${path:-not found}"
+  if command -v npm >/dev/null 2>&1; then
+    printf '  npm package:     %s\n' "$(npm ls -g --depth=0 "$PACKAGE" 2>/dev/null | grep -o "${PACKAGE}@.*" || echo "not installed")"
+  fi
+}
+
+install_codex_auth() {
+  command -v npm >/dev/null 2>&1 || {
+    error "npm not found; install node first (devbox setup nvm, then nvm install 22)"
+    return 1
+  }
+
+  info "Installing $PACKAGE"
+  npm install -g "$PACKAGE"
+
+  printf '\n'
+  status
+  printf '\n'
+  success "codex-auth setup complete"
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+  -h | --help)
+    usage
+    ;;
+  --status)
+    ACTION="status"
+    shift
+    ;;
+  *)
+    error "Unknown option: $1"
+    exit 1
+    ;;
+  esac
+done
+
+case "$ACTION" in
+install)
+  install_codex_auth
+  ;;
+status)
+  status
+  ;;
+esac
